@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.5"
+$VERSION = "v5.6"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -290,10 +290,17 @@ if ($modoSel -eq "2") {
     if ($LASTEXITCODE -eq 0) {
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
         cmd /c "wsl --update"
+        $codigo = $LASTEXITCODE
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        # wsl --update devuelve 0 haya o no update: contarlo como "al dia"
-        Write-OK "WSL al dia (se actualiza solo si hay version nueva)."
-        $updAlDia++
+        if ($codigo -eq 0) {
+            # wsl --update devuelve 0 haya o no update: contarlo como "al dia"
+            Write-OK "WSL al dia (se actualiza solo si hay version nueva)."
+            $updAlDia++
+        } else {
+            Write-Warn "WSL: la actualizacion fallo (suele ser un error transitorio"
+            Write-Warn "de red o del servidor de Microsoft). Reintenta mas tarde."
+            $updError++
+        }
     } else {
         Write-Dim "WSL no esta instalado. Saltado."
         $updSaltado++
