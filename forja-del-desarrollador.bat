@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.8"
+$VERSION = "v6.0"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -90,7 +90,7 @@ function Ask-SN { param($pregunta)
 }
 function Write-Separador { Write-Dim "------------------------------------------------------------" }
 
-$T = 21
+$T = 22
 $status = @{}
 $necesitaReabrir = $false
 
@@ -132,8 +132,11 @@ Write-Host "  --- DEPLOY Y SEGURIDAD (17-20) ---" -ForegroundColor White
 Write-Host "    [17] Netlify CLI   [18] Vercel CLI"
 Write-Host "    [19] Supabase CLI  [20] Snyk CLI"
 Write-Host ""
-Write-Host "  --- VINCULACIONES (21) ---" -ForegroundColor White
-Write-Host "    [21] Asistente de conexion de servicios"
+Write-Host "  --- SKILLS (21) ---" -ForegroundColor White
+Write-Host "    [21] Skills de Claude Code (pack Forja + oficiales)"
+Write-Host ""
+Write-Host "  --- VINCULACIONES (22) ---" -ForegroundColor White
+Write-Host "    [22] Asistente de conexion de servicios"
 Write-Host ""
 Write-Section "============================================================"
 Write-Host ""
@@ -1078,12 +1081,102 @@ if (-not $nm) {
 }
 
 # ============================================================
+#  [21] SKILLS DE CLAUDE CODE
+# ============================================================
+Write-Titulo 21 $T "Skills de Claude Code" "Capacidades que se cargan bajo demanda"
+Write-Host "  Una skill le ensena a Claude Code una capacidad nueva y se"
+Write-Host "  carga SOLO cuando se usa: no gasta tokens el resto del tiempo."
+Write-Host "  Ej: /bat-installer-builder | skill-creator | docx, pdf, xlsx"
+Write-Host ""
+
+$skillsDest = "$env:USERPROFILE\.claude\skills"
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Warn "git no disponible: reinicia la terminal y corre el script de nuevo."
+    $status["skills"] = "PENDIENTE"
+    $necesitaReabrir = $true
+} else {
+    New-Item -ItemType Directory -Force $skillsDest | Out-Null
+    $skillsInstaladas = 0
+
+    # --- Pack de skills de la Forja ---
+    Write-Host "  El pack de la Forja trae skills desarrolladas por el autor" -ForegroundColor White
+    Write-Host "  (Rodolfo Agustin Garcia - ragustingarcia.com). Cada una lleva" -ForegroundColor White
+    Write-Host "  su credito en el archivo, y ese credito siempre se conserva." -ForegroundColor White
+    Write-Host ""
+    if (Ask-SN "Instalar el pack de skills de la Forja?") {
+        $tmpForja = Join-Path $env:TEMP "forja-skills-tmp"
+        Remove-Item $tmpForja -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Info "Descargando pack de la Forja..."
+        git clone --depth 1 --quiet https://github.com/ragustingarcia/la-forja-del-desarrollador.git $tmpForja 2>&1 | Out-Null
+        $origenRodo = Join-Path $tmpForja "skills\rodo"
+        if (Test-Path $origenRodo) {
+            Write-Host ""
+            Write-Host "  Como las queres instalar?" -ForegroundColor Cyan
+            Write-Host "    [1] Tal cual estan (con el agradecimiento al autor)" -ForegroundColor White
+            Write-Host "    [2] Personalizadas: se agrega tu nombre como adaptador" -ForegroundColor White
+            Write-Host "        (el credito del autor original se conserva igual)" -ForegroundColor White
+            $modoSkill = Read-Host "  Elegi 1 o 2 (ENTER = 1)"
+            $adaptador = $null
+            if ($modoSkill -eq "2") { $adaptador = Read-Host "  Tu nombre (como queres figurar)" }
+            Write-Host ""
+            foreach ($sk in (Get-ChildItem $origenRodo -Directory)) {
+                $destinoSk = Join-Path $skillsDest $sk.Name
+                if (Test-Path $destinoSk) {
+                    Write-Dim "$($sk.Name) ya existe. Saltada (no se pisa la version local)."
+                } else {
+                    Copy-Item $sk.FullName $destinoSk -Recurse
+                    if ($adaptador) {
+                        $mdSkill = Join-Path $destinoSk "SKILL.md"
+                        if (Test-Path $mdSkill) { Add-Content $mdSkill "`n---`n`n> Adaptada para: $adaptador" }
+                    }
+                    Write-OK "$($sk.Name) instalada."
+                    $skillsInstaladas++
+                }
+            }
+        } else {
+            Write-Warn "No se pudo descargar el pack (sin internet o GitHub caido?)."
+        }
+        Remove-Item $tmpForja -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # --- Skills oficiales de Anthropic (se clonan de su repo original) ---
+    Write-Host ""
+    Write-Host "  Las oficiales de Anthropic se descargan de github.com/anthropics/skills:" -ForegroundColor White
+    Write-Host "    skill-creator (para crear tus propias skills), docx, pdf, xlsx, pptx" -ForegroundColor White
+    Write-Host ""
+    if (Ask-SN "Instalar las skills oficiales de Anthropic?") {
+        $tmpAnth = Join-Path $env:TEMP "anthropic-skills-tmp"
+        Remove-Item $tmpAnth -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Info "Descargando desde anthropics/skills..."
+        git clone --depth 1 --quiet https://github.com/anthropics/skills.git $tmpAnth 2>&1 | Out-Null
+        $setOficial = @("skill-creator","docx","pdf","xlsx","pptx")
+        foreach ($nombreSk in $setOficial) {
+            $origenSk  = Join-Path $tmpAnth "skills\$nombreSk"
+            $destinoSk = Join-Path $skillsDest $nombreSk
+            if (-not (Test-Path $origenSk)) { Write-Warn "$nombreSk no se encontro en el repo oficial."; continue }
+            if (Test-Path $destinoSk) { Write-Dim "$nombreSk ya existe. Saltada." }
+            else { Copy-Item $origenSk $destinoSk -Recurse; Write-OK "$nombreSk instalada."; $skillsInstaladas++ }
+        }
+        Remove-Item $tmpAnth -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host ""
+    if ($skillsInstaladas -gt 0) {
+        Write-OK "$skillsInstaladas skill(s) instaladas en ~\.claude\skills"
+        Write-Dim "Se activan solas cuando hacen falta; tambien con /nombre-de-la-skill"
+    } else {
+        Write-Dim "No se instalaron skills nuevas."
+    }
+    $status["skills"] = "OK"
+}
+
+# ============================================================
 #  RESUMEN DE INSTALACION
 # ============================================================
 Write-Host ""
 Write-Host ""
 Write-Section "============================================================"
-Write-Section "  RESUMEN DE INSTALACION (Pasos 1-20)"
+Write-Section "  RESUMEN DE INSTALACION (Pasos 1-21)"
 Write-Section "============================================================"
 Write-Host ""
 
@@ -1107,7 +1200,8 @@ $items = @(
     @("netlify",   "Netlify CLI"),
     @("vercel",    "Vercel CLI"),
     @("supabase",  "Supabase CLI"),
-    @("snyk",      "Snyk CLI")
+    @("snyk",      "Snyk CLI"),
+    @("skills",    "Skills de Claude Code")
 )
 
 foreach ($item in $items) {
@@ -1136,11 +1230,11 @@ if ($necesitaReabrir) {
 }
 
 # ============================================================
-#  [21] ASISTENTE DE VINCULACION
+#  [22] ASISTENTE DE VINCULACION
 # ============================================================
 Write-Host ""
 Write-Section "============================================================"
-Write-Section "  [21/$T] Asistente de vinculacion de servicios"
+Write-Section "  [22/$T] Asistente de vinculacion de servicios"
 Write-Dim     "  Conecta cada herramienta con tu cuenta"
 Write-Section "============================================================"
 Write-Host ""

@@ -3,7 +3,7 @@
 # La Forja del Desarrollador
 
 > Setup completo para desarrollar con Claude Code en Windows.  
-> 21 herramientas instaladas, configuradas y vinculadas en un solo script.
+> 21 herramientas + skills de Claude Code, instaladas, configuradas y vinculadas en un solo script.
 
 [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-f0722e)](LICENSE)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-ffb454)](https://github.com/ragustingarcia/la-forja-del-desarrollador)
@@ -80,10 +80,15 @@ Si Windows bloquea el script, click en "Más información" → "Ejecutar de toda
 | 19 | Supabase CLI | PostgreSQL, auth, storage y edge functions |
 | 20 | Snyk CLI | Scanner de vulnerabilidades en dependencias |
 
+### Skills de Claude Code
+| # | Herramienta | Para qué |
+|---|---|---|
+| 21 | Skills | Pack de la Forja (skills del autor, con crédito) + oficiales de Anthropic (skill-creator, docx, pdf, xlsx, pptx) |
+
 ### Vinculaciones
 | # | Herramienta | Para qué |
 |---|---|---|
-| 21 | Asistente de conexión | Conecta GitHub CLI, Claude MCP, Netlify, Vercel, Supabase, Snyk y Docker con tu cuenta |
+| 22 | Asistente de conexión | Conecta GitHub CLI, Claude MCP, Netlify, Vercel, Supabase, Snyk y Docker con tu cuenta |
 
 ---
 
@@ -100,6 +105,22 @@ El asistente de vinculación verifica y conecta cada servicio:
 - **Docker** → verifica que Docker Desktop esté corriendo
 
 Si ya estás conectado a algún servicio, el script lo detecta y lo marca como OK sin pedirte nada.
+
+---
+
+## Skills de Claude Code (paso 21)
+
+Una skill le enseña a Claude Code una capacidad nueva, y se carga **solo cuando se usa** — por eso ahorra tokens frente a instrucciones permanentes. El paso 21 ofrece dos packs, cada uno opcional:
+
+**Pack de la Forja** — skills desarrolladas por el autor ([detalle en `skills/`](skills/README.md)). Al instalarlas elegís:
+1. **Tal cual están**, con el agradecimiento al autor en cada archivo, o
+2. **Personalizadas**: se agrega tu nombre como adaptador.
+
+En ambos casos **el crédito del desarrollador original se conserva** — es la única condición de uso.
+
+**Oficiales de Anthropic** — `skill-creator`, `docx`, `pdf`, `xlsx`, `pptx`. Se descargan directamente del repo oficial [anthropics/skills](https://github.com/anthropics/skills) (no se redistribuyen desde acá).
+
+Las skills existentes en tu `~/.claude/skills` **nunca se pisan**: si ya tenés una con el mismo nombre, se saltea.
 
 ---
 
@@ -145,6 +166,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v6.0 | **Paso 21 — Skills de Claude Code**: pack de la Forja (skills del autor con crédito preservado, opción de personalizar con tu nombre) + set oficial de Anthropic clonado de su repo; vinculaciones pasan a ser el paso 22 |
 | v5.8 | WSL: si la descarga desde Microsoft Store falla (403 `Wsl/UpdatePackage/0x80190193`), reintenta automáticamente con `--web-download` (baja desde GitHub) |
 | v5.7 | Detección de doble instalación de Claude Code (npm global + nativa): ofrece eliminar la npm y quedarse con la nativa, con confirmación y verificación posterior |
 | v5.6 | WSL: un fallo de `wsl --update` (ej. error 403 transitorio del servidor de Microsoft) ya no se reporta como OK — se cuenta como error con sugerencia de reintentar |
