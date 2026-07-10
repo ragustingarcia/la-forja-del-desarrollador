@@ -143,6 +143,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v5.4 | Modo actualización: progreso en vivo (barras nativas de winget/npm/pip/WSL, ya no parece congelado); detección de Python por versión instalada (3.13/3.12/3.11/3.10 — antes solo buscaba 3.13); Claude Code CLI se actualiza con `claude update` (cubre instalación nativa, no solo npm); Supabase CLI con fallback a npm |
 | v5.3 | Modo actualización: detección "ya al día" por exit code de winget (`0x8A15002B`, independiente del idioma — antes daba falso error); PowerShell 7 se actualiza en ventana aparte al cerrar (no puede actualizarse mientras el script corre en él) |
 | v5.2 | **Modo actualización**: menú al inicio ([1] Setup completo / [2] Solo actualizar); actualiza winget + npm + WSL + libs Python de lo ya instalado, con resumen final |
 | v5.1 | Verificación de Claude Code no interactiva (`claude doctor` colgaba el script), guard en la configuración de Git recién instalado, detección WSL por exit code (el output UTF-16 de wsl.exe rompía el parseo de texto), mensaje de éxito restaurado, URL de actualizaciones, kit de marca (banner, badges, CITATION.cff) |

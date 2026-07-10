@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.3"
+$VERSION = "v5.4"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -157,10 +157,30 @@ if ($modoSel -eq "2") {
 
     $updOK = 0; $updAlDia = 0; $updSaltado = 0; $updError = 0
     $updatePwshAlCerrar = $false
+    $env:PATH = "$env:PATH;$env:ProgramFiles\nodejs;$env:APPDATA\npm;$env:USERPROFILE\.local\bin"
 
     # winget devuelve 0x8A15002B (-1978335189) cuando NO hay update aplicable;
     # es la senal confiable, independiente del idioma de Windows
     $WINGET_SIN_UPDATE = -1978335189
+
+    # Corre winget upgrade mostrando su barra de progreso nativa en vivo
+    function Invoke-WingetUpdate { param($id, $nombre)
+        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+        winget upgrade --id $id --source winget --accept-package-agreements --accept-source-agreements
+        $codigo = $LASTEXITCODE
+        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+        if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre ya esta al dia."; return "aldia" }
+        if ($codigo -eq 0) { Write-OK "$nombre actualizado."; return "ok" }
+        Write-Warn "${nombre}: no se pudo actualizar. Si esta abierto, cerralo y reintenta."
+        return "error"
+    }
+    function Add-UpdResultado { param($r)
+        switch ($r) {
+            "ok"    { $script:updOK++ }
+            "aldia" { $script:updAlDia++ }
+            "error" { $script:updError++ }
+        }
+    }
 
     # --- PowerShell 7 (caso especial: este script corre EN pwsh) ---
     # No se puede actualizar un programa mientras esta en uso, y pwsh
@@ -187,32 +207,19 @@ if ($modoSel -eq "2") {
         @("Git.Git",                    "Git"),
         @("OpenJS.NodeJS.LTS",          "Node.js LTS"),
         @("pnpm.pnpm",                  "pnpm"),
-        @("Python.Python.3.13",         "Python 3.13"),
         @("Microsoft.VisualStudioCode", "VS Code"),
         @("Anthropic.Claude",           "Claude Desktop"),
         @("GitHub.cli",                 "GitHub CLI"),
         @("Docker.DockerDesktop",       "Docker Desktop"),
         @("MongoDB.Shell",              "mongosh"),
         @("Ollama.Ollama",              "Ollama"),
-        @("Gyan.FFmpeg",                "FFmpeg"),
-        @("Supabase.CLI",               "Supabase CLI")
+        @("Gyan.FFmpeg",                "FFmpeg")
     )
     foreach ($tool in $wingetTools) {
         $id = $tool[0]; $nombre = $tool[1]
         Write-Info "$nombre..."
         if (Test-WingetPkg $id) {
-            $out = (winget upgrade --id $id --source winget --accept-package-agreements --accept-source-agreements 2>&1) | Out-String
-            $codigo = $LASTEXITCODE
-            if ($codigo -eq $WINGET_SIN_UPDATE -or $out -match "applicable update|actualizaci.n aplicable|no newer version") {
-                Write-OK "$nombre ya esta al dia."
-                $updAlDia++
-            } elseif ($codigo -eq 0) {
-                Write-OK "$nombre actualizado."
-                $updOK++
-            } else {
-                Write-Warn "${nombre}: no se pudo actualizar. Si esta abierto, cerralo y reintenta."
-                $updError++
-            }
+            Add-UpdResultado (Invoke-WingetUpdate $id $nombre)
         } else {
             Write-Dim "$nombre no esta instalado. Saltado."
             $updSaltado++
@@ -220,11 +227,53 @@ if ($modoSel -eq "2") {
         Write-Host ""
     }
 
+    # --- Python (el id de winget incluye la version: 3.13, 3.12, etc.) ---
+    Write-Info "Python..."
+    $pyId = $null
+    foreach ($v in @("3.13","3.12","3.11","3.10")) {
+        if (Test-WingetPkg "Python.Python.$v") { $pyId = "Python.Python.$v"; break }
+    }
+    if ($pyId) {
+        Add-UpdResultado (Invoke-WingetUpdate $pyId "Python")
+    } else {
+        Write-Dim "Python no esta instalado via winget. Saltado."
+        $updSaltado++
+    }
+    Write-Host ""
+
+    # --- Supabase CLI (winget o npm, segun como se instalo) ---
+    Write-Info "Supabase CLI..."
+    if (Test-WingetPkg "Supabase.CLI") {
+        Add-UpdResultado (Invoke-WingetUpdate "Supabase.CLI" "Supabase CLI")
+    } elseif (Get-Command supabase -ErrorAction SilentlyContinue) {
+        if ((Get-Command npm -ErrorAction SilentlyContinue) -and (Test-NpmPkg "supabase")) {
+            Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+            npm install -g supabase@latest
+            $codigo = $LASTEXITCODE
+            Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+            if ($codigo -eq 0) { Write-OK "Supabase CLI actualizado."; $updOK++ }
+            else {
+                Write-Warn "Supabase CLI: la instalacion npm vieja no se puede actualizar."
+                Write-Warn "Corre el modo Setup completo para migrarla a winget."
+                $updError++
+            }
+        } else {
+            Write-Warn "Supabase CLI instalado por otro medio: actualizalo manualmente."
+            $updError++
+        }
+    } else {
+        Write-Dim "Supabase CLI no esta instalado. Saltado."
+        $updSaltado++
+    }
+    Write-Host ""
+
     # --- WSL ---
     Write-Info "WSL..."
     cmd /c "wsl --status >nul 2>&1"
     if ($LASTEXITCODE -eq 0) {
-        cmd /c "wsl --update 2>&1" | Out-Null
+        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+        cmd /c "wsl --update"
+        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         Write-OK "WSL actualizado."
         $updOK++
     } else {
@@ -233,21 +282,37 @@ if ($modoSel -eq "2") {
     }
     Write-Host ""
 
+    # --- Claude Code CLI (updater propio: cubre instalacion nativa y npm) ---
+    Write-Info "Claude Code CLI..."
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+        claude update
+        $codigo = $LASTEXITCODE
+        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+        if ($codigo -eq 0) { Write-OK "Claude Code CLI al dia."; $updOK++ }
+        else { Write-Warn "Claude Code CLI: proba 'claude update' en una terminal nueva."; $updError++ }
+    } else {
+        Write-Dim "Claude Code CLI no esta instalado. Saltado."
+        $updSaltado++
+    }
+    Write-Host ""
+
     # --- Paquetes npm globales ---
-    $env:PATH = "$env:PATH;$env:ProgramFiles\nodejs;$env:APPDATA\npm"
     if (Get-Command npm -ErrorAction SilentlyContinue) {
         $npmTools = @(
-            @("@anthropic-ai/claude-code", "Claude Code CLI"),
-            @("netlify-cli",               "Netlify CLI"),
-            @("vercel",                    "Vercel CLI"),
-            @("snyk",                      "Snyk CLI")
+            @("netlify-cli", "Netlify CLI"),
+            @("vercel",      "Vercel CLI"),
+            @("snyk",        "Snyk CLI")
         )
         foreach ($tool in $npmTools) {
             $pkg = $tool[0]; $nombre = $tool[1]
             Write-Info "$nombre..."
             if (Test-NpmPkg $pkg) {
-                npm install -g "$pkg@latest" 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) { Write-OK "$nombre actualizado a la ultima version."; $updOK++ }
+                Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+                npm install -g "$pkg@latest"
+                $codigo = $LASTEXITCODE
+                Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+                if ($codigo -eq 0) { Write-OK "$nombre actualizado a la ultima version."; $updOK++ }
                 else { Write-Warn "${nombre}: error al actualizar."; $updError++ }
             } else {
                 Write-Dim "$nombre no esta instalado. Saltado."
@@ -263,8 +328,11 @@ if ($modoSel -eq "2") {
     # --- Librerias Python ---
     Write-Info "Librerias Python..."
     if (Test-PipReal) {
-        pip install --upgrade fastapi "uvicorn[standard]" python-multipart pdfplumber requests 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-OK "Librerias Python al dia."; $updOK++ }
+        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+        pip install --upgrade fastapi "uvicorn[standard]" python-multipart pdfplumber requests
+        $codigo = $LASTEXITCODE
+        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+        if ($codigo -eq 0) { Write-OK "Librerias Python al dia."; $updOK++ }
         else { Write-Warn "Librerias Python: error al actualizar."; $updError++ }
     } else {
         Write-Dim "pip no disponible. Saltado."
