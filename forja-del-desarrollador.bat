@@ -422,8 +422,9 @@ if ($modoSel -eq "2") {
     if ($updError -gt 0) {
         Write-Host "  Con errores:     $updError" -ForegroundColor Yellow
         Write-Host ""
-        Write-Warn "Los errores suelen ser programas abiertos (VS Code, Docker)."
-        Write-Warn "Cerralos y volve a correr el modo actualizacion."
+        Write-Warn "Revisa el detalle de cada error mas arriba. Causas tipicas:"
+        Write-Warn "un programa abierto (cerralo y reintenta) o una falla temporal"
+        Write-Warn "de red o del servidor de descargas (reintenta mas tarde)."
     }
     Write-Host ""
     Write-Section "============================================================"
