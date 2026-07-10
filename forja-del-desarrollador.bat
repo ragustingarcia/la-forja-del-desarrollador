@@ -22,12 +22,13 @@ exit /b
 : end batch / begin PowerShell #>
 
 # ============================================================
-#  FORJA DEL DESARROLLADOR v5
+#  FORJA DEL DESARROLLADOR
 #  Setup completo para desarrollar con Claude Code en Windows
-#  by Rodo Agustin Garcia  |  ragustingarcia.com
+#  by Rodolfo Agustin Garcia  |  ragustingarcia.com
+#  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5"
+$VERSION = "v5.1"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -208,16 +209,12 @@ Write-Host ""
 Write-Info "Verificando..."
 Write-Host ""
 
+# wsl.exe emite UTF-16 con nulos intercalados: no parsear texto, usar exit code
 $wslInstalled = $false
 try {
-    $wslDistros = (wsl -l -v 2>&1) | Out-String
-    if ($wslDistros -and $wslDistros.Length -gt 10 -and $wslDistros -notmatch "no tiene distribuciones|has no distributions|not recognized|no se reconoce") {
-        $wslInstalled = $true
-    }
+    cmd /c "wsl --status >nul 2>&1"
+    if ($LASTEXITCODE -eq 0) { $wslInstalled = $true }
 } catch {}
-if (-not $wslInstalled) {
-    try { if (Get-Command wsl -ErrorAction SilentlyContinue) { $wslInstalled = $true } } catch {}
-}
 
 if ($wslInstalled) {
     Write-OK "WSL ya instalado."
@@ -264,20 +261,25 @@ Write-Host ""
 Write-Separador
 Write-Info "Configuracion de identidad Git (necesaria para hacer commits)..."
 Write-Host ""
-$gitName  = (git config --global user.name  2>&1) | Out-String
-$gitEmail = (git config --global user.email 2>&1) | Out-String
-if ($gitName.Trim() -and $gitEmail.Trim()) {
-    Write-OK "Identidad ya configurada: $($gitName.Trim()) <$($gitEmail.Trim())>"
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    $gitName  = (git config --global user.name  2>&1) | Out-String
+    $gitEmail = (git config --global user.email 2>&1) | Out-String
+    if ($gitName.Trim() -and $gitEmail.Trim()) {
+        Write-OK "Identidad ya configurada: $($gitName.Trim()) <$($gitEmail.Trim())>"
+    } else {
+        Write-Warn "Git no tiene nombre/email configurado. Sin esto los commits fallan."
+        Write-Host ""
+        $inputNombre = Read-Host "  Tu nombre completo (ej: Juan Perez)"
+        $inputEmail  = Read-Host "  Tu email de GitHub"
+        if ($inputNombre) { git config --global user.name  $inputNombre }
+        if ($inputEmail)  { git config --global user.email $inputEmail  }
+        git config --global core.autocrlf true
+        git config --global init.defaultBranch main
+        Write-OK "Identidad Git configurada."
+    }
 } else {
-    Write-Warn "Git no tiene nombre/email configurado. Sin esto los commits fallan."
-    Write-Host ""
-    $inputNombre = Read-Host "  Tu nombre completo (ej: Juan Perez)"
-    $inputEmail  = Read-Host "  Tu email de GitHub"
-    if ($inputNombre) { git config --global user.name  $inputNombre }
-    if ($inputEmail)  { git config --global user.email $inputEmail  }
-    git config --global core.autocrlf true
-    git config --global init.defaultBranch main
-    Write-OK "Identidad Git configurada."
+    Write-Warn "Git recien instalado: reinicia la terminal y corre el script"
+    Write-Warn "de nuevo para configurar tu nombre y email."
 }
 
 # ============================================================
@@ -479,12 +481,14 @@ if (-not $nm) {
     if ($status["claude"] -eq "OK") {
         Write-Host ""
         Write-Separador
-        Write-Info "Verificando instalacion con claude doctor..."
-        Write-Host ""
+        Write-Info "Verificando instalacion..."
+        # claude doctor es interactivo (TUI): no sirve en un script desatendido
         try {
-            claude doctor 2>&1 | ForEach-Object { Write-Host "  $_" }
+            $cv = (claude --version 2>&1) | Out-String
+            if ($cv -match "\d+\.\d+") { Write-OK "Claude Code responde ($($cv.Trim()))." }
+            else { Write-Warn "Instalado pero no responde. Corre 'claude doctor' en una terminal nueva." }
         } catch {
-            Write-Warn "No se pudo correr claude doctor. Verificar manualmente."
+            Write-Warn "No se pudo verificar. Corre 'claude doctor' en una terminal nueva."
         }
     }
 }
@@ -1062,6 +1066,11 @@ if ($pendientes -gt 0) {
     Write-Warn "$pendientes servicio(s) pendiente(s) de vincular."
     Write-Warn "Volve a correr este script para verificar las conexiones."
     Write-Host ""
+} else {
+    Write-Host ""
+    Write-Host "  *** TODAS LAS CONEXIONES ESTAN ACTIVAS ***" -ForegroundColor Green
+    Write-Host "  Tu estacion de trabajo esta 100% lista." -ForegroundColor Green
+    Write-Host ""
 }
 
 # ============================================================
@@ -1085,6 +1094,8 @@ Write-Host ""
 Write-Dim     "  Recursos:"
 Write-Dim     "    Docs: https://docs.anthropic.com/claude-code"
 Write-Dim     "    Issues: https://github.com/anthropics/claude-code/issues"
+Write-Dim     "    Actualizaciones de este script:"
+Write-Dim     "    https://github.com/ragustingarcia/la-forja-del-desarrollador"
 Write-Host ""
 
 # ============================================================

@@ -1,7 +1,13 @@
+![La Forja del Desarrollador](assets/banner.svg)
+
 # La Forja del Desarrollador
 
 > Setup completo para desarrollar con Claude Code en Windows.  
 > 21 herramientas instaladas, configuradas y vinculadas en un solo script.
+
+[![Licencia MIT](https://img.shields.io/badge/licencia-MIT-f0722e)](LICENSE)
+[![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-ffb454)](https://github.com/ragustingarcia/la-forja-del-desarrollador)
+[![Hecho por Rodolfo Agustín García](https://img.shields.io/badge/por-ragustingarcia.com-17151a)](https://ragustingarcia.com/)
 
 ---
 
@@ -118,16 +124,21 @@ Descargá la versión más reciente del script y volvé a correrlo. Detecta lo q
 
 | Versión | Cambios |
 |---|---|
-| v5 | Python 3.13, pnpm, Supabase CLI via winget, MCP GitHub corregido (server-github oficial), configuración de identidad Git, claude doctor, detección WSL mejorada |
+| v5.1 | Verificación de Claude Code no interactiva (`claude doctor` colgaba el script), guard en la configuración de Git recién instalado, detección WSL por exit code (el output UTF-16 de wsl.exe rompía el parseo de texto), mensaje de éxito restaurado, URL de actualizaciones, kit de marca (banner, badges, CITATION.cff) |
+| v5 | Python 3.13, pnpm, Supabase CLI via winget, MCP GitHub corregido (server-github oficial), configuración de identidad Git, detección WSL mejorada |
 | v4 | Asistente interactivo de vinculación, detección de stubs de Python en WindowsApps |
 
 ---
 
 ## Autor
 
-Hecho por **Rodo Agustín García** — [ragustingarcia.com](https://ragustingarcia.com)
+Hecho por **Rodolfo Agustín García** — [ragustingarcia.com](https://ragustingarcia.com/)
 
-Si te resultó útil, issues y PRs son bienvenidos.
+- GitHub: [@ragustingarcia](https://github.com/ragustingarcia)
+- LinkedIn: [ragustingarcia](https://www.linkedin.com/in/ragustingarcia/)
+- Lab: [rcwe.ragustingarcia.com](https://rcwe.ragustingarcia.com/)
+
+Si te resultó útil, issues y PRs son bienvenidos. Para citar esta herramienta, usá el botón **"Cite this repository"** de GitHub (definido en [CITATION.cff](CITATION.cff)).
 
 ---
 

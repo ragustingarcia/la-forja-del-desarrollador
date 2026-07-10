@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "Si usás o compartís esta herramienta, citala así."
+title: "La Forja del Desarrollador"
+abstract: "Setup completo para desarrollar con Claude Code en Windows: 21 herramientas instaladas, configuradas y vinculadas en un solo script."
+type: software
+version: "5.1"
+date-released: 2026-07-10
+url: "https://github.com/ragustingarcia/la-forja-del-desarrollador"
+repository-code: "https://github.com/ragustingarcia/la-forja-del-desarrollador"
+license: MIT
+authors:
+  - family-names: "García"
+    given-names: "Rodolfo Agustín"
+    website: "https://ragustingarcia.com/"
+keywords:
+  - claude-code
+  - windows
+  - setup
+  - developer-tools
+  - onboarding
