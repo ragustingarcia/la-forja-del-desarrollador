@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.4"
+$VERSION = "v5.5"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -163,8 +163,14 @@ if ($modoSel -eq "2") {
     # es la senal confiable, independiente del idioma de Windows
     $WINGET_SIN_UPDATE = -1978335189
 
-    # Corre winget upgrade mostrando su barra de progreso nativa en vivo
+    # Pre-chequea si hay update; solo si lo hay corre winget upgrade
+    # mostrando su barra de progreso nativa en vivo
     function Invoke-WingetUpdate { param($id, $nombre)
+        $chk = (winget list --id $id --upgrade-available --accept-source-agreements 2>&1) | Out-String
+        if ($chk -notmatch [regex]::Escape($id)) {
+            Write-OK "$nombre ya esta al dia."
+            return "aldia"
+        }
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
         winget upgrade --id $id --source winget --accept-package-agreements --accept-source-agreements
         $codigo = $LASTEXITCODE
@@ -172,6 +178,26 @@ if ($modoSel -eq "2") {
         if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre ya esta al dia."; return "aldia" }
         if ($codigo -eq 0) { Write-OK "$nombre actualizado."; return "ok" }
         Write-Warn "${nombre}: no se pudo actualizar. Si esta abierto, cerralo y reintenta."
+        return "error"
+    }
+
+    # Actualiza un paquete npm global solo si la version instalada
+    # difiere de la ultima publicada (evita reinstalaciones de minutos)
+    function Invoke-NpmUpdate { param($pkg, $nombre)
+        $vLocal = $null
+        $lista = (npm list -g $pkg --depth=0 2>&1) | Out-String
+        if ($lista -match ([regex]::Escape($pkg) + "@(\S+)")) { $vLocal = $Matches[1] }
+        $vUltima = ((npm view $pkg version 2>&1) | Out-String).Trim()
+        if ($vLocal -and $vUltima -and $vLocal -eq $vUltima) {
+            Write-OK "$nombre ya esta al dia ($vLocal)."
+            return "aldia"
+        }
+        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+        npm install -g "$pkg@latest"
+        $codigo = $LASTEXITCODE
+        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+        if ($codigo -eq 0) { Write-OK "$nombre actualizado a la ultima version."; return "ok" }
+        Write-Warn "${nombre}: error al actualizar."
         return "error"
     }
     function Add-UpdResultado { param($r)
@@ -247,16 +273,7 @@ if ($modoSel -eq "2") {
         Add-UpdResultado (Invoke-WingetUpdate "Supabase.CLI" "Supabase CLI")
     } elseif (Get-Command supabase -ErrorAction SilentlyContinue) {
         if ((Get-Command npm -ErrorAction SilentlyContinue) -and (Test-NpmPkg "supabase")) {
-            Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-            npm install -g supabase@latest
-            $codigo = $LASTEXITCODE
-            Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-            if ($codigo -eq 0) { Write-OK "Supabase CLI actualizado."; $updOK++ }
-            else {
-                Write-Warn "Supabase CLI: la instalacion npm vieja no se puede actualizar."
-                Write-Warn "Corre el modo Setup completo para migrarla a winget."
-                $updError++
-            }
+            Add-UpdResultado (Invoke-NpmUpdate "supabase" "Supabase CLI")
         } else {
             Write-Warn "Supabase CLI instalado por otro medio: actualizalo manualmente."
             $updError++
@@ -274,8 +291,9 @@ if ($modoSel -eq "2") {
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
         cmd /c "wsl --update"
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        Write-OK "WSL actualizado."
-        $updOK++
+        # wsl --update devuelve 0 haya o no update: contarlo como "al dia"
+        Write-OK "WSL al dia (se actualiza solo si hay version nueva)."
+        $updAlDia++
     } else {
         Write-Dim "WSL no esta instalado. Saltado."
         $updSaltado++
@@ -308,12 +326,7 @@ if ($modoSel -eq "2") {
             $pkg = $tool[0]; $nombre = $tool[1]
             Write-Info "$nombre..."
             if (Test-NpmPkg $pkg) {
-                Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-                npm install -g "$pkg@latest"
-                $codigo = $LASTEXITCODE
-                Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-                if ($codigo -eq 0) { Write-OK "$nombre actualizado a la ultima version."; $updOK++ }
-                else { Write-Warn "${nombre}: error al actualizar."; $updError++ }
+                Add-UpdResultado (Invoke-NpmUpdate $pkg $nombre)
             } else {
                 Write-Dim "$nombre no esta instalado. Saltado."
                 $updSaltado++
@@ -328,11 +341,10 @@ if ($modoSel -eq "2") {
     # --- Librerias Python ---
     Write-Info "Librerias Python..."
     if (Test-PipReal) {
-        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        pip install --upgrade fastapi "uvicorn[standard]" python-multipart pdfplumber requests
+        # -q oculta el listado "Requirement already satisfied"; solo muestra cambios reales
+        pip install --upgrade -q fastapi "uvicorn[standard]" python-multipart pdfplumber requests
         $codigo = $LASTEXITCODE
-        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        if ($codigo -eq 0) { Write-OK "Librerias Python al dia."; $updOK++ }
+        if ($codigo -eq 0) { Write-OK "Librerias Python al dia."; $updAlDia++ }
         else { Write-Warn "Librerias Python: error al actualizar."; $updError++ }
     } else {
         Write-Dim "pip no disponible. Saltado."
