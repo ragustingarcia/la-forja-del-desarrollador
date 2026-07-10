@@ -145,6 +145,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v5.8 | WSL: si la descarga desde Microsoft Store falla (403 `Wsl/UpdatePackage/0x80190193`), reintenta automáticamente con `--web-download` (baja desde GitHub) |
 | v5.7 | Detección de doble instalación de Claude Code (npm global + nativa): ofrece eliminar la npm y quedarse con la nativa, con confirmación y verificación posterior |
 | v5.6 | WSL: un fallo de `wsl --update` (ej. error 403 transitorio del servidor de Microsoft) ya no se reporta como OK — se cuenta como error con sugerencia de reintentar |
 | v5.5 | Modo actualización mucho más rápido: los paquetes npm comparan versión instalada vs última publicada y saltean la reinstalación si coinciden (antes Netlify CLI reinstalaba 1100 paquetes por 2 min para quedar igual); winget pre-chequea con `--upgrade-available` (sin bloques de progreso vacíos); pip en modo silencioso; WSL cuenta como "ya al día" |

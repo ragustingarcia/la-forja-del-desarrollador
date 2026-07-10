@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.7"
+$VERSION = "v5.8"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -291,14 +291,21 @@ if ($modoSel -eq "2") {
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
         cmd /c "wsl --update"
         $codigo = $LASTEXITCODE
+        if ($codigo -ne 0) {
+            # El CDN de Microsoft Store a veces devuelve 403 (Wsl/UpdatePackage/
+            # 0x80190193); --web-download baja desde GitHub y lo esquiva
+            Write-Warn "Fallo la descarga desde Microsoft Store. Reintentando desde GitHub..."
+            cmd /c "wsl --update --web-download"
+            $codigo = $LASTEXITCODE
+        }
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         if ($codigo -eq 0) {
             # wsl --update devuelve 0 haya o no update: contarlo como "al dia"
             Write-OK "WSL al dia (se actualiza solo si hay version nueva)."
             $updAlDia++
         } else {
-            Write-Warn "WSL: la actualizacion fallo (suele ser un error transitorio"
-            Write-Warn "de red o del servidor de Microsoft). Reintenta mas tarde."
+            Write-Warn "WSL: la actualizacion fallo por ambas vias. Reintenta mas tarde"
+            Write-Warn "o corre manualmente: wsl --update --web-download"
             $updError++
         }
     } else {
