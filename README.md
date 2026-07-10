@@ -135,6 +135,8 @@ Lo que no está instalado se saltea sin preguntar. Al final muestra un resumen: 
 
 **Caso especial — PowerShell 7**: el script corre en pwsh, así que no puede actualizarlo mientras se ejecuta. Si detecta un update disponible, al cerrar el script se abre una ventana aparte que lo actualiza automáticamente.
 
+**Caso especial — doble instalación de Claude Code**: si detecta que tenés Claude Code instalado dos veces (npm global + instalador nativo), te ofrece eliminar la npm y quedarte solo con la nativa (la recomendada por Anthropic). Requiere cerrar todas las sesiones de Claude Code primero — el script te lo avisa y pide confirmación.
+
 Para actualizar **el script en sí**, descargá la última versión de este repo.
 
 ---
@@ -143,6 +145,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v5.7 | Detección de doble instalación de Claude Code (npm global + nativa): ofrece eliminar la npm y quedarse con la nativa, con confirmación y verificación posterior |
 | v5.6 | WSL: un fallo de `wsl --update` (ej. error 403 transitorio del servidor de Microsoft) ya no se reporta como OK — se cuenta como error con sugerencia de reintentar |
 | v5.5 | Modo actualización mucho más rápido: los paquetes npm comparan versión instalada vs última publicada y saltean la reinstalación si coinciden (antes Netlify CLI reinstalaba 1100 paquetes por 2 min para quedar igual); winget pre-chequea con `--upgrade-available` (sin bloques de progreso vacíos); pip en modo silencioso; WSL cuenta como "ya al día" |
 | v5.4 | Modo actualización: progreso en vivo (barras nativas de winget/npm/pip/WSL, ya no parece congelado); detección de Python por versión instalada (3.13/3.12/3.11/3.10 — antes solo buscaba 3.13); Claude Code CLI se actualiza con `claude update` (cubre instalación nativa, no solo npm); Supabase CLI con fallback a npm |

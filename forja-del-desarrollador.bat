@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.6"
+$VERSION = "v5.7"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -309,6 +309,48 @@ if ($modoSel -eq "2") {
 
     # --- Claude Code CLI (updater propio: cubre instalacion nativa y npm) ---
     Write-Info "Claude Code CLI..."
+
+    # Deteccion de doble instalacion (npm global + nativa). Tener las dos
+    # confunde al PATH y al updater; Anthropic recomienda la nativa.
+    $claudeNpm    = (Test-Path "$env:APPDATA\npm\claude*") -or (Test-Path "$env:APPDATA\npm\node_modules\@anthropic-ai\claude-code")
+    $claudeNativo = (Test-Path "$env:USERPROFILE\.local\bin\claude.exe") -or (Test-Path "$env:USERPROFILE\.local\share\claude")
+    if ($claudeNpm -and $claudeNativo) {
+        Write-Warn "Se detectaron DOS instalaciones de Claude Code:"
+        Write-Host "    - npm global  (AppData\Roaming\npm)" -ForegroundColor White
+        Write-Host "    - nativa      (.local\share\claude)  <- recomendada por Anthropic" -ForegroundColor White
+        Write-Host ""
+        Write-Warn "IMPORTANTE: cerra TODAS las sesiones de Claude Code antes de limpiar"
+        Write-Warn "(otras terminales, VS Code, la app de escritorio con sesiones activas)."
+        Write-Host ""
+        if (Ask-SN "Eliminar la instalacion npm y quedarte solo con la nativa?") {
+            Write-Host ""
+            Write-Info "Eliminando instalacion npm de Claude Code..."
+            npm uninstall -g "@anthropic-ai/claude-code" 2>&1 | Out-Null
+            # npm puede dejar shims sueltos si la instalacion estaba rota
+            foreach ($s in @("claude","claude.cmd","claude.ps1")) {
+                Remove-Item "$env:APPDATA\npm\$s" -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item "$env:APPDATA\npm\node_modules\@anthropic-ai\claude-code" -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path "$env:APPDATA\npm\claude*") {
+                Write-Warn "No se pudo eliminar del todo (hay una sesion de Claude Code abierta?)."
+                Write-Warn "Cerra todo y volve a correr el modo actualizacion."
+            } else {
+                Write-OK "Instalacion npm eliminada."
+                $cv = $null
+                try { $cv = (claude --version 2>&1) | Out-String } catch {}
+                if ($cv -match "\d+\.\d+") {
+                    Write-OK "La instalacion nativa responde ($($cv.Trim()))."
+                } else {
+                    Write-Warn "Abri una terminal NUEVA y verifica con: claude --version"
+                }
+            }
+            Write-Host ""
+        } else {
+            Write-Dim "Se mantienen las dos instalaciones."
+            Write-Host ""
+        }
+    }
+
     if (Get-Command claude -ErrorAction SilentlyContinue) {
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
         claude update
