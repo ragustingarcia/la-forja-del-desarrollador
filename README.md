@@ -24,8 +24,15 @@ Si algo ya está instalado, lo detecta y lo saltea. Si algo falla, te dice qué 
 ```
 1. Descargá forja-del-desarrollador.bat
 2. Click derecho → "Ejecutar como administrador"
-3. Seguí las instrucciones en pantalla
+3. Elegí el modo y seguí las instrucciones en pantalla
 ```
+
+Al arrancar, el script pregunta qué modo querés:
+
+| Modo | Qué hace |
+|---|---|
+| **[1] Setup completo** | Instala las 21 herramientas y te guía para vincular cada servicio |
+| **[2] Solo actualizar** | Recorre lo que ya tenés instalado y lo actualiza a la última versión, en la misma ventana |
 
 Si Windows bloquea el script, click en "Más información" → "Ejecutar de todas formas".
 
@@ -114,9 +121,19 @@ Si ya estás conectado a algún servicio, el script lo detecta y lo marca como O
 
 ---
 
-## Actualizar
+## Actualizar tus herramientas
 
-Descargá la versión más reciente del script y volvé a correrlo. Detecta lo que ya está instalado y solo instala lo que falta.
+Corré el script y elegí el modo **[2] Solo actualizar**. Recorre las herramientas instaladas y las actualiza:
+
+- **winget**: PowerShell 7, Git, Node.js, pnpm, Python, VS Code, Claude Desktop, GitHub CLI, Docker, mongosh, Ollama, FFmpeg, Supabase CLI
+- **npm**: Claude Code CLI, Netlify CLI, Vercel CLI, Snyk CLI (a `@latest`)
+- **WSL** y **librerías Python** (`pip --upgrade`)
+
+Lo que no está instalado se saltea sin preguntar. Al final muestra un resumen: actualizados / ya al día / saltados / con errores.
+
+> Tip: cerrá VS Code y Docker antes de actualizar — un programa abierto puede bloquear su propia actualización.
+
+Para actualizar **el script en sí**, descargá la última versión de este repo.
 
 ---
 
@@ -124,6 +141,7 @@ Descargá la versión más reciente del script y volvé a correrlo. Detecta lo q
 
 | Versión | Cambios |
 |---|---|
+| v5.2 | **Modo actualización**: menú al inicio ([1] Setup completo / [2] Solo actualizar); actualiza winget + npm + WSL + libs Python de lo ya instalado, con resumen final |
 | v5.1 | Verificación de Claude Code no interactiva (`claude doctor` colgaba el script), guard en la configuración de Git recién instalado, detección WSL por exit code (el output UTF-16 de wsl.exe rompía el parseo de texto), mensaje de éxito restaurado, URL de actualizaciones, kit de marca (banner, badges, CITATION.cff) |
 | v5 | Python 3.13, pnpm, Supabase CLI via winget, MCP GitHub corregido (server-github oficial), configuración de identidad Git, detección WSL mejorada |
 | v4 | Asistente interactivo de vinculación, detección de stubs de Python en WindowsApps |

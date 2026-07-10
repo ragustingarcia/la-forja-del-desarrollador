@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.1"
+$VERSION = "v5.2"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -137,7 +137,141 @@ Write-Host "    [21] Asistente de conexion de servicios"
 Write-Host ""
 Write-Section "============================================================"
 Write-Host ""
-Read-Host "  Presiona ENTER para comenzar"
+Write-Host "  MODO DE EJECUCION:" -ForegroundColor White
+Write-Host ""
+Write-Host "    [1] Setup completo    - instalar todo y vincular servicios" -ForegroundColor Green
+Write-Host "    [2] Solo actualizar   - actualizar lo que ya esta instalado" -ForegroundColor Cyan
+Write-Host ""
+$modoSel = Read-Host "  Elegi una opcion (ENTER = 1)"
+
+# ============================================================
+#  MODO ACTUALIZACION
+# ============================================================
+if ($modoSel -eq "2") {
+    Write-Host ""
+    Write-Section "============================================================"
+    Write-Section "  MODO ACTUALIZACION"
+    Write-Dim     "  Solo se actualiza lo que ya esta instalado"
+    Write-Section "============================================================"
+    Write-Host ""
+
+    $updOK = 0; $updAlDia = 0; $updSaltado = 0; $updError = 0
+
+    # --- Herramientas winget ---
+    $wingetTools = @(
+        @("Microsoft.PowerShell",       "PowerShell 7"),
+        @("Git.Git",                    "Git"),
+        @("OpenJS.NodeJS.LTS",          "Node.js LTS"),
+        @("pnpm.pnpm",                  "pnpm"),
+        @("Python.Python.3.13",         "Python 3.13"),
+        @("Microsoft.VisualStudioCode", "VS Code"),
+        @("Anthropic.Claude",           "Claude Desktop"),
+        @("GitHub.cli",                 "GitHub CLI"),
+        @("Docker.DockerDesktop",       "Docker Desktop"),
+        @("MongoDB.Shell",              "mongosh"),
+        @("Ollama.Ollama",              "Ollama"),
+        @("Gyan.FFmpeg",                "FFmpeg"),
+        @("Supabase.CLI",               "Supabase CLI")
+    )
+    foreach ($tool in $wingetTools) {
+        $id = $tool[0]; $nombre = $tool[1]
+        Write-Info "$nombre..."
+        if (Test-WingetPkg $id) {
+            $out = (winget upgrade --id $id --source winget --accept-package-agreements --accept-source-agreements 2>&1) | Out-String
+            if ($out -match "No applicable update|No hay actualizaciones aplicables|no newer version") {
+                Write-OK "$nombre ya esta al dia."
+                $updAlDia++
+            } elseif ($LASTEXITCODE -eq 0) {
+                Write-OK "$nombre actualizado."
+                $updOK++
+            } else {
+                Write-Warn "${nombre}: no se pudo actualizar (puede estar en uso)."
+                $updError++
+            }
+        } else {
+            Write-Dim "$nombre no esta instalado. Saltado."
+            $updSaltado++
+        }
+        Write-Host ""
+    }
+
+    # --- WSL ---
+    Write-Info "WSL..."
+    cmd /c "wsl --status >nul 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+        cmd /c "wsl --update 2>&1" | Out-Null
+        Write-OK "WSL actualizado."
+        $updOK++
+    } else {
+        Write-Dim "WSL no esta instalado. Saltado."
+        $updSaltado++
+    }
+    Write-Host ""
+
+    # --- Paquetes npm globales ---
+    $env:PATH = "$env:PATH;$env:ProgramFiles\nodejs;$env:APPDATA\npm"
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        $npmTools = @(
+            @("@anthropic-ai/claude-code", "Claude Code CLI"),
+            @("netlify-cli",               "Netlify CLI"),
+            @("vercel",                    "Vercel CLI"),
+            @("snyk",                      "Snyk CLI")
+        )
+        foreach ($tool in $npmTools) {
+            $pkg = $tool[0]; $nombre = $tool[1]
+            Write-Info "$nombre..."
+            if (Test-NpmPkg $pkg) {
+                npm install -g "$pkg@latest" 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) { Write-OK "$nombre actualizado a la ultima version."; $updOK++ }
+                else { Write-Warn "${nombre}: error al actualizar."; $updError++ }
+            } else {
+                Write-Dim "$nombre no esta instalado. Saltado."
+                $updSaltado++
+            }
+            Write-Host ""
+        }
+    } else {
+        Write-Warn "npm no disponible: se saltean los paquetes npm."
+        Write-Host ""
+    }
+
+    # --- Librerias Python ---
+    Write-Info "Librerias Python..."
+    if (Test-PipReal) {
+        pip install --upgrade fastapi "uvicorn[standard]" python-multipart pdfplumber requests 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-OK "Librerias Python al dia."; $updOK++ }
+        else { Write-Warn "Librerias Python: error al actualizar."; $updError++ }
+    } else {
+        Write-Dim "pip no disponible. Saltado."
+        $updSaltado++
+    }
+
+    # --- Resumen ---
+    Write-Host ""
+    Write-Section "============================================================"
+    Write-Section "  RESUMEN DE ACTUALIZACION"
+    Write-Section "============================================================"
+    Write-Host ""
+    Write-Host "  Actualizados:    $updOK" -ForegroundColor Green
+    Write-Host "  Ya al dia:       $updAlDia" -ForegroundColor Green
+    Write-Host "  Saltados:        $updSaltado" -ForegroundColor DarkGray
+    if ($updError -gt 0) {
+        Write-Host "  Con errores:     $updError" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Warn "Los errores suelen ser programas abiertos (VS Code, Docker)."
+        Write-Warn "Cerralos y volve a correr el modo actualizacion."
+    }
+    Write-Host ""
+    Write-Section "============================================================"
+    Write-Host ""
+    Write-Host "  La Forja del Desarrollador $VERSION" -ForegroundColor Yellow
+    Write-Dim   "  by Rodolfo Agustin Garcia  |  ragustingarcia.com"
+    Write-Host ""
+    Write-Section "============================================================"
+    Write-Host ""
+    Read-Host "  Presiona ENTER para cerrar"
+    exit
+}
 
 # ============================================================
 #  [1] WINGET
