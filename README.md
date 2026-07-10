@@ -133,6 +133,8 @@ Lo que no está instalado se saltea sin preguntar. Al final muestra un resumen: 
 
 > Tip: cerrá VS Code y Docker antes de actualizar — un programa abierto puede bloquear su propia actualización.
 
+**Caso especial — PowerShell 7**: el script corre en pwsh, así que no puede actualizarlo mientras se ejecuta. Si detecta un update disponible, al cerrar el script se abre una ventana aparte que lo actualiza automáticamente.
+
 Para actualizar **el script en sí**, descargá la última versión de este repo.
 
 ---
@@ -141,6 +143,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v5.3 | Modo actualización: detección "ya al día" por exit code de winget (`0x8A15002B`, independiente del idioma — antes daba falso error); PowerShell 7 se actualiza en ventana aparte al cerrar (no puede actualizarse mientras el script corre en él) |
 | v5.2 | **Modo actualización**: menú al inicio ([1] Setup completo / [2] Solo actualizar); actualiza winget + npm + WSL + libs Python de lo ya instalado, con resumen final |
 | v5.1 | Verificación de Claude Code no interactiva (`claude doctor` colgaba el script), guard en la configuración de Git recién instalado, detección WSL por exit code (el output UTF-16 de wsl.exe rompía el parseo de texto), mensaje de éxito restaurado, URL de actualizaciones, kit de marca (banner, badges, CITATION.cff) |
 | v5 | Python 3.13, pnpm, Supabase CLI via winget, MCP GitHub corregido (server-github oficial), configuración de identidad Git, detección WSL mejorada |

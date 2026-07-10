@@ -28,7 +28,7 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v5.2"
+$VERSION = "v5.3"
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -156,10 +156,34 @@ if ($modoSel -eq "2") {
     Write-Host ""
 
     $updOK = 0; $updAlDia = 0; $updSaltado = 0; $updError = 0
+    $updatePwshAlCerrar = $false
+
+    # winget devuelve 0x8A15002B (-1978335189) cuando NO hay update aplicable;
+    # es la senal confiable, independiente del idioma de Windows
+    $WINGET_SIN_UPDATE = -1978335189
+
+    # --- PowerShell 7 (caso especial: este script corre EN pwsh) ---
+    # No se puede actualizar un programa mientras esta en uso, y pwsh
+    # siempre lo esta aca. Se verifica si hay update y se difiere al cierre.
+    Write-Info "PowerShell 7..."
+    if (Test-WingetPkg "Microsoft.PowerShell") {
+        $pwshChk = (winget list --id Microsoft.PowerShell --upgrade-available --accept-source-agreements 2>&1) | Out-String
+        if ($pwshChk -match "Microsoft\.PowerShell") {
+            Write-Warn "PowerShell 7 tiene actualizacion, pero esta en uso (este script corre en el)."
+            Write-Info "Se va a actualizar en una ventana aparte al cerrar este script."
+            $updatePwshAlCerrar = $true
+        } else {
+            Write-OK "PowerShell 7 ya esta al dia."
+            $updAlDia++
+        }
+    } else {
+        Write-Dim "PowerShell 7 no instalado via winget. Saltado."
+        $updSaltado++
+    }
+    Write-Host ""
 
     # --- Herramientas winget ---
     $wingetTools = @(
-        @("Microsoft.PowerShell",       "PowerShell 7"),
         @("Git.Git",                    "Git"),
         @("OpenJS.NodeJS.LTS",          "Node.js LTS"),
         @("pnpm.pnpm",                  "pnpm"),
@@ -178,14 +202,15 @@ if ($modoSel -eq "2") {
         Write-Info "$nombre..."
         if (Test-WingetPkg $id) {
             $out = (winget upgrade --id $id --source winget --accept-package-agreements --accept-source-agreements 2>&1) | Out-String
-            if ($out -match "No applicable update|No hay actualizaciones aplicables|no newer version") {
+            $codigo = $LASTEXITCODE
+            if ($codigo -eq $WINGET_SIN_UPDATE -or $out -match "applicable update|actualizaci.n aplicable|no newer version") {
                 Write-OK "$nombre ya esta al dia."
                 $updAlDia++
-            } elseif ($LASTEXITCODE -eq 0) {
+            } elseif ($codigo -eq 0) {
                 Write-OK "$nombre actualizado."
                 $updOK++
             } else {
-                Write-Warn "${nombre}: no se pudo actualizar (puede estar en uso)."
+                Write-Warn "${nombre}: no se pudo actualizar. Si esta abierto, cerralo y reintenta."
                 $updError++
             }
         } else {
@@ -255,6 +280,9 @@ if ($modoSel -eq "2") {
     Write-Host "  Actualizados:    $updOK" -ForegroundColor Green
     Write-Host "  Ya al dia:       $updAlDia" -ForegroundColor Green
     Write-Host "  Saltados:        $updSaltado" -ForegroundColor DarkGray
+    if ($updatePwshAlCerrar) {
+        Write-Host "  Al cerrar:       PowerShell 7 (en ventana aparte)" -ForegroundColor Cyan
+    }
     if ($updError -gt 0) {
         Write-Host "  Con errores:     $updError" -ForegroundColor Yellow
         Write-Host ""
@@ -269,7 +297,16 @@ if ($modoSel -eq "2") {
     Write-Host ""
     Write-Section "============================================================"
     Write-Host ""
+    if ($updatePwshAlCerrar) {
+        Write-Info "Al presionar ENTER se abre una ventana que actualiza PowerShell 7"
+        Write-Info "cuando este script termine. Cerra otras ventanas de pwsh si tenes."
+        Write-Host ""
+    }
     Read-Host "  Presiona ENTER para cerrar"
+    if ($updatePwshAlCerrar) {
+        # cmd no depende de pwsh: espera a que este proceso muera y actualiza
+        Start-Process cmd -ArgumentList '/c', 'title Actualizando PowerShell 7 && echo Esperando a que cierre la Forja... && timeout /t 6 /nobreak >nul && winget upgrade --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements && echo. && echo Listo. PowerShell 7 actualizado. && pause'
+    }
     exit
 }
 
