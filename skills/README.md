@@ -34,3 +34,10 @@ híbrida .bat/PowerShell 7 — la skill que destila las lecciones aprendidas
 construyendo esta misma Forja. Verificación antes de instalar, progreso
 visible, re-ejecutable, manejo de las trampas de Windows (Python falso de
 MS Store, encoding UTF-16 de WSL, exit codes de winget, PATH post-instalación).
+
+## Seguridad de la descarga
+
+Desde v6.1, cada pack usa un SHA fijo que se muestra antes de confirmar. Los enlaces y junctions
+se rechazan y cada skill se prepara antes de aparecer en `~/.claude/skills`. Una skill existente
+se saltea; actualizar la Forja no reemplaza automáticamente una versión vieja de esta skill.
+Compará y migrá manualmente las skills que ya tenías. Ver [SECURITY.md](../SECURITY.md).

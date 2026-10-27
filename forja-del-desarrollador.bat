@@ -1,24 +1,15 @@
 <# : batch portion
 @echo off
->nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
-if '%errorlevel%' NEQ '0' (
-    echo.
-    echo   [!] Se requieren privilegios de Administrador.
-    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
-    "%temp%\getadmin.vbs"
-    del "%temp%\getadmin.vbs"
-    exit /B
-)
-pushd "%CD%"
-CD /D "%~dp0"
-copy "%~f0" "%temp%\forja_setup.ps1" >nul
-pwsh -NoProfile -ExecutionPolicy Bypass -File "%temp%\forja_setup.ps1"
-del "%temp%\forja_setup.ps1" >nul 2>&1
+setlocal DisableDelayedExpansion
+set "FORJA_SCRIPT_PATH=%~f0"
+rem Ruta por entorno: nunca interpolar el nombre del BAT dentro de codigo PowerShell.
+rem El payload se lee en memoria; no hay VBS, PS1 temporal ni elevacion global.
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -Command "try { Set-Location -LiteralPath $env:SystemRoot; & ([scriptblock]::Create([IO.File]::ReadAllText($env:FORJA_SCRIPT_PATH, [Text.Encoding]::UTF8))) } catch { Write-Host 'La Forja se detuvo. Revisa el archivo y las politicas del equipo.' -ForegroundColor Red; exit 1 }"
+set "FORJA_EXIT_CODE=%ERRORLEVEL%"
 echo.
 echo   Presiona cualquier tecla para cerrar...
 pause >nul
-exit /b
+exit /b %FORJA_EXIT_CODE%
 : end batch / begin PowerShell #>
 
 # ============================================================
@@ -28,7 +19,19 @@ exit /b
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v6.0"
+$VERSION = "v6.1"
+# Ni npm, ni skills, ni conexiones deben heredar privilegios de administrador.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host 'Abri la Forja con doble clic, desde una terminal SIN elevar.' -ForegroundColor Yellow
+    exit 1
+}
+# Evitar resolucion de herramientas/configuracion desde el directorio descargado.
+Set-Location -LiteralPath (Join-Path $env:SystemRoot 'System32')
+$script:ForjaWorkspaces = @{}
+$ForjaSkillsRevision = '39204a10fc5ce3027a3180cc69446266f9cefe7a'
+$AnthropicSkillsRevision = 'dbd4588f9e1033efb41dad4bef2f7947c8993d44'
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -48,31 +51,30 @@ function Write-Titulo { param($num, $total, $nombre, $desc)
 }
 
 function Test-PythonReal {
-    try { $o = (python --version 2>&1) | Out-String; if ($o -match "Python \d+\.\d+\.\d+") { return $o.Trim() } } catch {}
+    try { $o = (python --version 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match "Python \d+\.\d+\.\d+") { return $o.Trim() } } catch {}
     return $null
 }
 function Test-PipReal {
-    try { $o = (pip --version 2>&1) | Out-String; if ($o -match "pip \d+") { return $true } } catch {}
+    try { $o = (python -m pip --version 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match "pip \d+") { return $true } } catch {}
     return $false
 }
 function Test-FastapiInstalled {
-    try { $o = (pip show fastapi 2>&1) | Out-String; if ($o -match "Name: fastapi") { return $true } } catch {}
-    try { $o = (python -m pip show fastapi 2>&1) | Out-String; if ($o -match "Name: fastapi") { return $true } } catch {}
+    try { $null = python -m pip show fastapi uvicorn python-multipart pdfplumber requests 2>&1; if ($LASTEXITCODE -eq 0) { return $true } } catch {}
     return $false
 }
 function Test-NpmPkg { param($pkg)
-    try { $o = (npm list -g $pkg --depth=0 2>&1) | Out-String; if ($o -match $pkg) { return $true } } catch {}
+    try { $o = (npm list -g $pkg --depth=0 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match ([regex]::Escape($pkg) + "@")) { return $true } } catch {}
     return $false
 }
 function Test-WingetPkg { param($id)
-    try { $o = (winget list --id $id --accept-source-agreements 2>&1) | Out-String; if ($o -match $id) { return $true } } catch {}
+    try { $o = (winget list --id $id --exact --source winget --accept-source-agreements 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match [regex]::Escape($id)) { return $true } } catch {}
     return $false
 }
 function Install-Winget { param($id, $nombre)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Info "[INSTALANDO] $nombre via winget..."
         Write-Host ""
-        winget install --id $id --source winget --accept-package-agreements --accept-source-agreements
+        winget install --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { Write-Host "  $_" }
         return ($LASTEXITCODE -eq 0)
     }
     return $false
@@ -82,13 +84,138 @@ function Install-Npm { param($pkg, $nombre)
     Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
     npm install -g $pkg --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
     Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-    return (Test-NpmPkg $pkg)
+    return ($LASTEXITCODE -eq 0 -and (Test-NpmPkg $pkg))
 }
 function Ask-SN { param($pregunta)
     $r = Read-Host "  $pregunta (S/N)"
-    return ($r -match "^[sS]")
+    return ($r.Trim() -match "^(?i:s|si|sí)$")
 }
 function Write-Separador { Write-Dim "------------------------------------------------------------" }
+
+
+# Unicamente funciones; los tests las extraen por AST sin ejecutar el instalador.
+function Assert-NoReparsePath { param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)) { throw 'Ruta absoluta requerida.' }
+    $current = [IO.Path]::GetFullPath($Path)
+    while ($current) {
+        # Get-Item detecta tambien enlaces cuyo destino no existe (Test-Path puede dar false).
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+        if ($item) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'No se permiten enlaces ni junctions en esta ruta.' }
+        }
+        $parent = [IO.Path]::GetDirectoryName($current)
+        if ($parent -eq $current) { break }
+        $current = $parent
+    }
+}
+function Get-ForjaTree { param([string]$Root)
+    Assert-NoReparsePath $Root
+    $pending = New-Object 'System.Collections.Generic.Queue[string]'
+    $pending.Enqueue([IO.Path]::GetFullPath($Root))
+    while ($pending.Count -gt 0) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $pending.Dequeue() -Force -ErrorAction Stop)) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Arbol con enlace o junction rechazado.' }
+            $item
+            if ($item.PSIsContainer) { $pending.Enqueue($item.FullName) }
+        }
+    }
+}
+function New-ForjaWorkspace {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible.' }
+    $base = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Forja\Staging'))
+    Assert-NoReparsePath $base
+    [IO.Directory]::CreateDirectory($base) | Out-Null
+    $path = Join-Path $base ([guid]::NewGuid().ToString('N'))
+    if (Test-Path -LiteralPath $path) { throw 'Colision de espacio temporal.' }
+    [IO.Directory]::CreateDirectory($path) | Out-Null
+    $script:ForjaWorkspaces[$path] = $base
+    return $path
+}
+function Remove-ForjaWorkspace { param([string]$Path)
+    if (-not $script:ForjaWorkspaces.ContainsKey($Path)) { throw 'No es un temporal creado por esta ejecucion.' }
+    $full = [IO.Path]::GetFullPath($Path)
+    $base = $script:ForjaWorkspaces[$Path]
+    if ([IO.Path]::GetDirectoryName($full) -ne $base -or [IO.Path]::GetFileName($full) -notmatch '^[0-9a-f]{32}$') {
+        throw 'Temporal fuera de la raiz esperada.'
+    }
+    # Validar el arbol entero ANTES del borrado; no seguir enlaces durante validacion.
+    $null = @(Get-ForjaTree $full)
+    Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+    $script:ForjaWorkspaces.Remove($Path)
+}
+function Get-ReviewedSkills { param(
+    [ValidateSet('https://github.com/ragustingarcia/la-forja-del-desarrollador.git', 'https://github.com/anthropics/skills.git')][string]$Repository,
+    [ValidatePattern('^[0-9a-f]{40}$')][string]$Revision,
+    [string]$Workspace
+)
+    if (-not $script:ForjaWorkspaces.ContainsKey($Workspace)) { throw 'Espacio de descarga desconocido.' }
+    Assert-NoReparsePath $Workspace
+    $repoPath = Join-Path $Workspace 'repo'
+    if (Test-Path -LiteralPath $repoPath) { throw 'La descarga debe empezar en una ruta vacia.' }
+    # Sin checkout de una rama cambiante, hooks o submodulos del repositorio remoto.
+    & git -c core.hooksPath=NUL init --quiet -- $repoPath 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo iniciar la descarga.' }
+    & git -C $repoPath -c core.hooksPath=NUL -c protocol.file.allow=never fetch --quiet --depth=1 --no-tags -- $Repository $Revision 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo descargar la revision fijada.' }
+    & git -C $repoPath -c core.hooksPath=NUL -c core.symlinks=true checkout --quiet --detach $Revision 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo extraer la revision fijada.' }
+    $head = (& git -C $repoPath rev-parse HEAD 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -cne $Revision) { throw 'La revision descargada no coincide.' }
+    return $repoPath
+}
+function Install-ReviewedSkill { param([string]$Source, [string]$DestinationRoot, [string]$Name, [string]$Adapter)
+    if ($Name -notmatch '^[a-z0-9][a-z0-9-]{0,63}$') { throw 'Nombre de skill invalido.' }
+    if ($Adapter -and ($Adapter.Length -gt 100 -or $Adapter -match '[\r\n\x00-\x1f]')) { throw 'Nombre de adaptador invalido.' }
+    $Source = [IO.Path]::GetFullPath($Source).TrimEnd('\')
+    $DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot).TrimEnd('\')
+    Assert-NoReparsePath $Source
+    Assert-NoReparsePath $DestinationRoot
+    if (-not (Test-Path -LiteralPath (Join-Path $Source 'SKILL.md') -PathType Leaf)) { throw 'Falta SKILL.md.' }
+    $tree = @(Get-ForjaTree $Source) # validar todo antes de copiar cualquier archivo
+    $destination = Join-Path $DestinationRoot $Name
+    if (Test-Path -LiteralPath $destination) { Write-Dim "$Name ya existe. Saltada."; return $false }
+    # Construir fuera de ~/.claude/skills y publicar solo al terminar.
+    $workspace = New-ForjaWorkspace
+    $stage = Join-Path $workspace $Name
+    try {
+      [IO.Directory]::CreateDirectory($stage) | Out-Null
+      foreach ($item in $tree) {
+        $relative = $item.FullName.Substring($Source.TrimEnd('\').Length).TrimStart('\')
+        $target = [IO.Path]::GetFullPath((Join-Path $stage $relative))
+        if (-not $target.StartsWith($stage + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Archivo fuera de la skill.' }
+        Assert-NoReparsePath $target
+        if ($item.PSIsContainer) { [IO.Directory]::CreateDirectory($target) | Out-Null }
+        else {
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
+            [IO.File]::Copy($item.FullName, $target, $false)
+        }
+      }
+      if ($Adapter) {
+        # Evitar multiples lineas en el credito agregado.
+        Add-Content -LiteralPath (Join-Path $stage 'SKILL.md') -Value "`n---`n`n> Adaptada para: $Adapter" -Encoding UTF8 -ErrorAction Stop
+      }
+      Assert-NoReparsePath $DestinationRoot
+      [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
+      [IO.Directory]::Move($stage, $destination) # falla si ya existe; no mezcla ni pisa
+    } finally {
+      Remove-ForjaWorkspace $workspace
+    }
+    return $true
+}
+function Get-WingetUpdateState { param([string]$Id)
+    $output = (winget list --id $Id --exact --source winget --upgrade-available --accept-source-agreements 2>&1) | Out-String
+    $code = $LASTEXITCODE
+    if ($code -eq -1978335189 -or $code -eq -1978335212) { return 'aldia' }
+    if ($code -ne 0) { return 'error' }
+    if ($output -match ('(?m)(?<!\S)' + [regex]::Escape($Id) + '(?=\s|$)')) { return 'update' }
+    # Un resultado vacio/desconocido con exit 0 NO demuestra estar actualizado.
+    return 'error'
+}
+function Test-SnykAuth {
+    # No consultar config get api: devuelve el secreto y no contempla OAuth.
+    $null = & snyk whoami --experimental 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
 
 $T = 22
 $status = @{}
@@ -145,7 +272,19 @@ Write-Host ""
 Write-Host "    [1] Setup completo    - instalar todo y vincular servicios" -ForegroundColor Green
 Write-Host "    [2] Solo actualizar   - actualizar lo que ya esta instalado" -ForegroundColor Cyan
 Write-Host ""
-$modoSel = Read-Host "  Elegi una opcion (ENTER = 1)"
+Write-Host "    [3] Diagnostico       - rutas de herramientas, sin ejecutar instaladores" -ForegroundColor Cyan
+Write-Host "    [0] Salir (por defecto)" -ForegroundColor DarkGray
+$modoSel = Read-Host "  Elegi 1, 2 o 3 (ENTER = salir)"
+if ($modoSel -eq '3') {
+    foreach ($tool in @('winget','pwsh','wsl','git','node','npm','python','pip','claude','gh','docker','snyk')) {
+        $command = Get-Command $tool -ErrorAction SilentlyContinue
+        if ($command) { Write-Info "$tool : $($command.Source)" } else { Write-Dim "$tool : no encontrado" }
+    }
+    exit 0
+}
+if ($modoSel -notin @('1','2')) { Write-Dim 'Sin cambios.'; exit 0 }
+Write-Warn 'Se instalaran o actualizaran paquetes de terceros. Revisa los avisos y permisos de cada proveedor.'
+if (-not (Ask-SN 'Continuar con este modo?')) { exit 0 }
 
 # ============================================================
 #  MODO ACTUALIZACION
@@ -159,7 +298,6 @@ if ($modoSel -eq "2") {
     Write-Host ""
 
     $updOK = 0; $updAlDia = 0; $updSaltado = 0; $updError = 0
-    $updatePwshAlCerrar = $false
     $env:PATH = "$env:PATH;$env:ProgramFiles\nodejs;$env:APPDATA\npm;$env:USERPROFILE\.local\bin"
 
     # winget devuelve 0x8A15002B (-1978335189) cuando NO hay update aplicable;
@@ -169,13 +307,14 @@ if ($modoSel -eq "2") {
     # Pre-chequea si hay update; solo si lo hay corre winget upgrade
     # mostrando su barra de progreso nativa en vivo
     function Invoke-WingetUpdate { param($id, $nombre)
-        $chk = (winget list --id $id --upgrade-available --accept-source-agreements 2>&1) | Out-String
-        if ($chk -notmatch [regex]::Escape($id)) {
+        $state = Get-WingetUpdateState $id
+        if ($state -eq 'error') { Write-Warn "${nombre}: no se pudo consultar la actualizacion."; return 'error' }
+        if ($state -eq 'aldia') {
             Write-OK "$nombre ya esta al dia."
             return "aldia"
         }
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        winget upgrade --id $id --source winget --accept-package-agreements --accept-source-agreements
+        winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { Write-Host "  $_" }
         $codigo = $LASTEXITCODE
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre ya esta al dia."; return "aldia" }
@@ -189,14 +328,18 @@ if ($modoSel -eq "2") {
     function Invoke-NpmUpdate { param($pkg, $nombre)
         $vLocal = $null
         $lista = (npm list -g $pkg --depth=0 2>&1) | Out-String
+        if ($LASTEXITCODE -ne 0) { Write-Warn "${nombre}: fallo la consulta local de npm."; return 'error' }
         if ($lista -match ([regex]::Escape($pkg) + "@(\S+)")) { $vLocal = $Matches[1] }
         $vUltima = ((npm view $pkg version 2>&1) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $vUltima -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') {
+            Write-Warn "${nombre}: no se pudo consultar una version valida del registro."; return 'error'
+        }
         if ($vLocal -and $vUltima -and $vLocal -eq $vUltima) {
             Write-OK "$nombre ya esta al dia ($vLocal)."
             return "aldia"
         }
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        npm install -g "$pkg@latest"
+        npm install -g "$pkg@$vUltima" 2>&1 | ForEach-Object { Write-Host "  $_" }
         $codigo = $LASTEXITCODE
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         if ($codigo -eq 0) { Write-OK "$nombre actualizado a la ultima version."; return "ok" }
@@ -211,25 +354,12 @@ if ($modoSel -eq "2") {
         }
     }
 
-    # --- PowerShell 7 (caso especial: este script corre EN pwsh) ---
-    # No se puede actualizar un programa mientras esta en uso, y pwsh
-    # siempre lo esta aca. Se verifica si hay update y se difiere al cierre.
-    Write-Info "PowerShell 7..."
-    if (Test-WingetPkg "Microsoft.PowerShell") {
-        $pwshChk = (winget list --id Microsoft.PowerShell --upgrade-available --accept-source-agreements 2>&1) | Out-String
-        if ($pwshChk -match "Microsoft\.PowerShell") {
-            Write-Warn "PowerShell 7 tiene actualizacion, pero esta en uso (este script corre en el)."
-            Write-Info "Se va a actualizar en una ventana aparte al cerrar este script."
-            $updatePwshAlCerrar = $true
-        } else {
-            Write-OK "PowerShell 7 ya esta al dia."
-            $updAlDia++
-        }
-    } else {
-        Write-Dim "PowerShell 7 no instalado via winget. Saltado."
-        $updSaltado++
-    }
-    Write-Host ""
+    # El lanzador usa Windows PowerShell 5.1, por lo que pwsh no queda bloqueado.
+    Write-Info 'PowerShell 7...'
+    if (Test-WingetPkg 'Microsoft.PowerShell') {
+        Add-UpdResultado (Invoke-WingetUpdate 'Microsoft.PowerShell' 'PowerShell 7')
+    } else { Write-Dim 'PowerShell 7 no instalado via winget. Saltado.'; $updSaltado++ }
+    Write-Host ''
 
     # --- Herramientas winget ---
     $wingetTools = @(
@@ -336,23 +466,11 @@ if ($modoSel -eq "2") {
             Write-Host ""
             Write-Info "Eliminando instalacion npm de Claude Code..."
             npm uninstall -g "@anthropic-ai/claude-code" 2>&1 | Out-Null
-            # npm puede dejar shims sueltos si la instalacion estaba rota
-            foreach ($s in @("claude","claude.cmd","claude.ps1")) {
-                Remove-Item "$env:APPDATA\npm\$s" -Force -ErrorAction SilentlyContinue
-            }
-            Remove-Item "$env:APPDATA\npm\node_modules\@anthropic-ai\claude-code" -Recurse -Force -ErrorAction SilentlyContinue
-            if (Test-Path "$env:APPDATA\npm\claude*") {
-                Write-Warn "No se pudo eliminar del todo (hay una sesion de Claude Code abierta?)."
-                Write-Warn "Cerra todo y volve a correr el modo actualizacion."
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn 'npm no pudo desinstalar Claude Code; no se borraron archivos manualmente.'
+                $updError++
             } else {
-                Write-OK "Instalacion npm eliminada."
-                $cv = $null
-                try { $cv = (claude --version 2>&1) | Out-String } catch {}
-                if ($cv -match "\d+\.\d+") {
-                    Write-OK "La instalacion nativa responde ($($cv.Trim()))."
-                } else {
-                    Write-Warn "Abri una terminal NUEVA y verifica con: claude --version"
-                }
+                Write-OK 'Desinstalador npm completado. Verifica claude --version en una terminal nueva.'
             }
             Write-Host ""
         } else {
@@ -401,7 +519,7 @@ if ($modoSel -eq "2") {
     Write-Info "Librerias Python..."
     if (Test-PipReal) {
         # -q oculta el listado "Requirement already satisfied"; solo muestra cambios reales
-        pip install --upgrade -q fastapi "uvicorn[standard]" python-multipart pdfplumber requests
+        python -m pip install --upgrade -q fastapi "uvicorn[standard]" python-multipart pdfplumber requests
         $codigo = $LASTEXITCODE
         if ($codigo -eq 0) { Write-OK "Librerias Python al dia."; $updAlDia++ }
         else { Write-Warn "Librerias Python: error al actualizar."; $updError++ }
@@ -419,9 +537,7 @@ if ($modoSel -eq "2") {
     Write-Host "  Actualizados:    $updOK" -ForegroundColor Green
     Write-Host "  Ya al dia:       $updAlDia" -ForegroundColor Green
     Write-Host "  Saltados:        $updSaltado" -ForegroundColor DarkGray
-    if ($updatePwshAlCerrar) {
-        Write-Host "  Al cerrar:       PowerShell 7 (en ventana aparte)" -ForegroundColor Cyan
-    }
+
     if ($updError -gt 0) {
         Write-Host "  Con errores:     $updError" -ForegroundColor Yellow
         Write-Host ""
@@ -437,17 +553,10 @@ if ($modoSel -eq "2") {
     Write-Host ""
     Write-Section "============================================================"
     Write-Host ""
-    if ($updatePwshAlCerrar) {
-        Write-Info "Al presionar ENTER se abre una ventana que actualiza PowerShell 7"
-        Write-Info "cuando este script termine. Cerra otras ventanas de pwsh si tenes."
-        Write-Host ""
-    }
+
     Read-Host "  Presiona ENTER para cerrar"
-    if ($updatePwshAlCerrar) {
-        # cmd no depende de pwsh: espera a que este proceso muera y actualiza
-        Start-Process cmd -ArgumentList '/c', 'title Actualizando PowerShell 7 && echo Esperando a que cierre la Forja... && timeout /t 6 /nobreak >nul && winget upgrade --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements && echo. && echo Listo. PowerShell 7 actualizado. && pause'
-    }
-    exit
+
+    if ($updError -gt 0) { exit 1 }; exit 0
 }
 
 # ============================================================
@@ -476,7 +585,7 @@ if ($wc) {
 #  [2] POWERSHELL 7
 # ============================================================
 Write-Titulo 2 $T "PowerShell 7" "Terminal moderna"
-Write-Host "  Terminal avanzada de Microsoft. Este script corre en pwsh."
+Write-Host "  Terminal avanzada de Microsoft. La Forja arranca con Windows PowerShell 5.1."
 Write-Host "  Ej: Ejecutar scripts, gestionar archivos, pipelines de datos"
 Write-Host ""
 Write-Info "Verificando..."
@@ -497,18 +606,7 @@ if (Get-Command pwsh -ErrorAction SilentlyContinue) {
 }
 
 Write-Host ""
-Write-Info "Configurando PowerShell 7 como terminal por defecto..."
-reg add "HKCU\Console\%Startup" /v "DelegationConsole" /t REG_SZ /d "{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}" /f 2>&1 | Out-Null
-reg add "HKCU\Console\%Startup" /v "DelegationTerminal" /t REG_SZ /d "{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}" /f 2>&1 | Out-Null
-$wt = "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
-if (Test-Path $wt) {
-    try {
-        $j = Get-Content $wt -Raw | ConvertFrom-Json
-        $pp = $j.profiles.list | Where-Object { $_.source -eq 'Windows.Terminal.PowershellCore' } | Select-Object -First 1
-        if (-not $pp) { $pp = $j.profiles.list | Where-Object { $_.name -match 'PowerShell' -and $_.commandline -match 'pwsh' } | Select-Object -First 1 }
-        if ($pp) { $j.defaultProfile = $pp.guid; $j | ConvertTo-Json -Depth 100 | Set-Content $wt -Encoding UTF8; Write-OK "Perfil por defecto configurado." }
-    } catch { Write-Warn "No se pudo configurar automaticamente el perfil de Windows Terminal." }
-}
+Write-Dim 'Para usar PowerShell 7 por defecto: Windows Terminal > Configuracion > Perfil predeterminado.'
 
 # ============================================================
 #  [3] WSL
@@ -528,20 +626,19 @@ try {
 } catch {}
 
 if ($wslInstalled) {
-    Write-OK "WSL ya instalado."
-    Write-Info "Actualizando WSL..."
-    cmd /c "wsl --update 2>&1" | Out-Null
-    Write-OK "WSL actualizado."
-    $status["wsl"] = "OK"
-} else {
-    Write-Info "[INSTALANDO] WSL..."
-    cmd /c "wsl --install --no-distribution 2>&1" | Out-Null
-    cmd /c "wsl --update 2>&1" | Out-Null
-    Write-OK "WSL instalado."
-    Write-Warn "Requiere REINICIAR la PC para completar."
-    $status["wsl"] = "OK - REINICIAR PC"
-    $necesitaReabrir = $true
-}
+    $status['wsl'] = 'OK'
+    Write-OK 'WSL ya instalado. Las actualizaciones se hacen en el modo [2].'
+} elseif (Ask-SN 'Instalar WSL? Solo este paso pedira permisos de administrador') {
+    try {
+        $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        $process = Start-Process -FilePath $wslExe -ArgumentList '--install','--no-distribution' -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
+            Write-Warn 'WSL: instalacion aceptada; reinicia y verifica wsl --status.'
+            $status['wsl'] = 'PENDIENTE - REINICIAR Y VERIFICAR'
+            $necesitaReabrir = $true
+        } else { throw 'Fallo la instalacion.' }
+    } catch { Write-Err 'WSL no se instalo o se cancelo UAC.'; $status['wsl'] = 'ERROR' }
+} else { $status['wsl'] = 'SALTADO' }
 
 # ============================================================
 #  [4] GIT
@@ -643,7 +740,7 @@ if (Get-Command pnpm -ErrorAction SilentlyContinue) {
         if ($nm) {
             Write-Info "[INSTALANDO] pnpm via npm..."
             npm install -g pnpm 2>&1 | Out-Null
-            if (Get-Command pnpm -ErrorAction SilentlyContinue) { Write-OK "Instalado via npm."; $status["pnpm"] = "OK" }
+            if ($LASTEXITCODE -eq 0 -and (Get-Command pnpm -ErrorAction SilentlyContinue)) { Write-OK "Instalado via npm."; $status["pnpm"] = "OK" }
             else { Write-Err "Error."; $status["pnpm"] = "ERROR" }
         } else {
             Write-Warn "npm no disponible. Instalar pnpm despues."
@@ -663,22 +760,13 @@ Write-Host ""
 Write-Info "Verificando..."
 Write-Host ""
 
-$ap = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
-$fp = Join-Path $ap "python.exe"; $fp3 = Join-Path $ap "python3.exe"
-if (Test-Path $fp) {
-    $fs = (Get-Item $fp -ErrorAction SilentlyContinue).Length
-    if ($fs -and $fs -lt 20000) {
-        Rename-Item $fp  "$fp.bak"  -Force -ErrorAction SilentlyContinue
-        Rename-Item $fp3 "$fp3.bak" -Force -ErrorAction SilentlyContinue
-    }
-}
 $pyPaths = @(
     "$env:LOCALAPPDATA\Programs\Python\Python313",
     "$env:LOCALAPPDATA\Programs\Python\Python313\Scripts",
     "$env:ProgramFiles\Python313",
     "$env:ProgramFiles\Python313\Scripts"
 )
-foreach ($p in $pyPaths) { if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$env:PATH;$p" } }
+foreach ($p in $pyPaths) { if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" } }
 
 $pv = Test-PythonReal
 if ($pv) {
@@ -687,7 +775,7 @@ if ($pv) {
 } else {
     if (Install-Winget "Python.Python.3.13" "Python 3.13") {
         Write-OK "Instalado."
-        foreach ($p in $pyPaths) { if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$env:PATH;$p" } }
+        foreach ($p in $pyPaths) { if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" } }
         if (Test-PythonReal) { $status["python"] = "OK" }
         else { $status["python"] = "OK - REABRIR"; $necesitaReabrir = $true }
     } else {
@@ -710,19 +798,14 @@ if (Test-FastapiInstalled) {
     $status["pylibs"] = "OK"
 } else {
     $pc = $null
-    if (Test-PipReal) { $pc = "pip" }
-    elseif (Test-PythonReal) { $pc = "python -m pip" }
+    if (Test-PipReal) { $pc = "python -m pip" }
 
     if ($pc) {
         Write-Info "[INSTALANDO] Librerias..."
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        if ($pc -eq "pip") {
-            pip install fastapi "uvicorn[standard]" python-multipart pdfplumber requests 2>&1 | ForEach-Object { Write-Host "  $_" }
-        } else {
-            python -m pip install fastapi "uvicorn[standard]" python-multipart pdfplumber requests 2>&1 | ForEach-Object { Write-Host "  $_" }
-        }
+        python -m pip install fastapi "uvicorn[standard]" python-multipart pdfplumber requests 2>&1 | ForEach-Object { Write-Host "  $_" }
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        if (Test-FastapiInstalled) { Write-OK "Instaladas."; $status["pylibs"] = "OK" }
+        if ($LASTEXITCODE -eq 0 -and (Test-FastapiInstalled)) { Write-OK "Instaladas."; $status["pylibs"] = "OK" }
         else { Write-Err "Error."; $status["pylibs"] = "ERROR" }
     } else {
         Write-Warn "pip no disponible. Reinicia y corre el script de nuevo."
@@ -780,7 +863,7 @@ if (-not $nm) {
         npm install -g @anthropic-ai/claude-code --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         $env:PATH = "$env:PATH;$env:APPDATA\npm"
-        if (Get-Command claude -ErrorAction SilentlyContinue) {
+        if ($LASTEXITCODE -eq 0 -and (Get-Command claude -ErrorAction SilentlyContinue)) {
             Write-OK "Instalado."
             $status["claude"] = "OK"
         } else {
@@ -1089,85 +1172,51 @@ Write-Host "  carga SOLO cuando se usa: no gasta tokens el resto del tiempo."
 Write-Host "  Ej: /bat-installer-builder | skill-creator | docx, pdf, xlsx"
 Write-Host ""
 
-$skillsDest = "$env:USERPROFILE\.claude\skills"
+$skillsDest = Join-Path $env:USERPROFILE '.claude\skills'
+$skillsInstaladas = 0
+$skillsErrores = 0
+$skillsElegidas = 0
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Warn "git no disponible: reinicia la terminal y corre el script de nuevo."
-    $status["skills"] = "PENDIENTE"
-    $necesitaReabrir = $true
+    Write-Warn 'Git no disponible: reinicia la terminal para instalar skills.'
+    $status['skills'] = 'PENDIENTE'
 } else {
-    New-Item -ItemType Directory -Force $skillsDest | Out-Null
-    $skillsInstaladas = 0
-
-    # --- Pack de skills de la Forja ---
-    Write-Host "  El pack de la Forja trae skills desarrolladas por el autor" -ForegroundColor White
-    Write-Host "  (Rodolfo Agustin Garcia - ragustingarcia.com). Cada una lleva" -ForegroundColor White
-    Write-Host "  su credito en el archivo, y ese credito siempre se conserva." -ForegroundColor White
-    Write-Host ""
-    if (Ask-SN "Instalar el pack de skills de la Forja?") {
-        $tmpForja = Join-Path $env:TEMP "forja-skills-tmp"
-        Remove-Item $tmpForja -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Info "Descargando pack de la Forja..."
-        git clone --depth 1 --quiet https://github.com/ragustingarcia/la-forja-del-desarrollador.git $tmpForja 2>&1 | Out-Null
-        $origenRodo = Join-Path $tmpForja "skills\rodo"
-        if (Test-Path $origenRodo) {
-            Write-Host ""
-            Write-Host "  Como las queres instalar?" -ForegroundColor Cyan
-            Write-Host "    [1] Tal cual estan (con el agradecimiento al autor)" -ForegroundColor White
-            Write-Host "    [2] Personalizadas: se agrega tu nombre como adaptador" -ForegroundColor White
-            Write-Host "        (el credito del autor original se conserva igual)" -ForegroundColor White
-            $modoSkill = Read-Host "  Elegi 1 o 2 (ENTER = 1)"
-            $adaptador = $null
-            if ($modoSkill -eq "2") { $adaptador = Read-Host "  Tu nombre (como queres figurar)" }
-            Write-Host ""
-            foreach ($sk in (Get-ChildItem $origenRodo -Directory)) {
-                $destinoSk = Join-Path $skillsDest $sk.Name
-                if (Test-Path $destinoSk) {
-                    Write-Dim "$($sk.Name) ya existe. Saltada (no se pisa la version local)."
-                } else {
-                    Copy-Item $sk.FullName $destinoSk -Recurse
-                    if ($adaptador) {
-                        $mdSkill = Join-Path $destinoSk "SKILL.md"
-                        if (Test-Path $mdSkill) { Add-Content $mdSkill "`n---`n`n> Adaptada para: $adaptador" }
-                    }
-                    Write-OK "$($sk.Name) instalada."
+    Write-Warn 'Las skills son instrucciones de terceros: revisalas antes de habilitarlas.'
+    $packs = @(
+        @{ Name='Forja'; Url='https://github.com/ragustingarcia/la-forja-del-desarrollador.git'; Revision=$ForjaSkillsRevision; Folder='skills\rodo'; Names=@('bat-installer-builder') },
+        @{ Name='Anthropic'; Url='https://github.com/anthropics/skills.git'; Revision=$AnthropicSkillsRevision; Folder='skills'; Names=@('skill-creator','docx','pdf','xlsx','pptx') }
+    )
+    foreach ($pack in $packs) {
+        Write-Info "$($pack.Name): revision $($pack.Revision)"
+        if (-not (Ask-SN "Descargar e instalar el pack $($pack.Name)?")) { continue }
+        $skillsElegidas++
+        $workspace = $null
+        try {
+            $workspace = New-ForjaWorkspace
+            $repo = Get-ReviewedSkills -Repository $pack.Url -Revision $pack.Revision -Workspace $workspace
+            foreach ($name in $pack.Names) {
+                $source = Join-Path (Join-Path $repo $pack.Folder) $name
+                $adapter = $null
+                if ($pack.Name -eq 'Forja' -and (Ask-SN 'Agregar tu nombre como adaptador, conservando el credito?')) {
+                    $adapter = Read-Host '  Tu nombre (una sola linea)'
+                }
+                if (Install-ReviewedSkill -Source $source -DestinationRoot $skillsDest -Name $name -Adapter $adapter) {
+                    Write-OK "$name instalada."
                     $skillsInstaladas++
                 }
             }
-        } else {
-            Write-Warn "No se pudo descargar el pack (sin internet o GitHub caido?)."
+        } catch {
+            Write-Err "No se pudo completar el pack $($pack.Name). No se reemplazan skills existentes."
+            $skillsErrores++
+        } finally {
+            if ($workspace) {
+                try { Remove-ForjaWorkspace $workspace }
+                catch { Write-Warn "Temporal retenido para revision: $workspace"; $skillsErrores++ }
+            }
         }
-        Remove-Item $tmpForja -Recurse -Force -ErrorAction SilentlyContinue
     }
-
-    # --- Skills oficiales de Anthropic (se clonan de su repo original) ---
-    Write-Host ""
-    Write-Host "  Las oficiales de Anthropic se descargan de github.com/anthropics/skills:" -ForegroundColor White
-    Write-Host "    skill-creator (para crear tus propias skills), docx, pdf, xlsx, pptx" -ForegroundColor White
-    Write-Host ""
-    if (Ask-SN "Instalar las skills oficiales de Anthropic?") {
-        $tmpAnth = Join-Path $env:TEMP "anthropic-skills-tmp"
-        Remove-Item $tmpAnth -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Info "Descargando desde anthropics/skills..."
-        git clone --depth 1 --quiet https://github.com/anthropics/skills.git $tmpAnth 2>&1 | Out-Null
-        $setOficial = @("skill-creator","docx","pdf","xlsx","pptx")
-        foreach ($nombreSk in $setOficial) {
-            $origenSk  = Join-Path $tmpAnth "skills\$nombreSk"
-            $destinoSk = Join-Path $skillsDest $nombreSk
-            if (-not (Test-Path $origenSk)) { Write-Warn "$nombreSk no se encontro en el repo oficial."; continue }
-            if (Test-Path $destinoSk) { Write-Dim "$nombreSk ya existe. Saltada." }
-            else { Copy-Item $origenSk $destinoSk -Recurse; Write-OK "$nombreSk instalada."; $skillsInstaladas++ }
-        }
-        Remove-Item $tmpAnth -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    Write-Host ""
-    if ($skillsInstaladas -gt 0) {
-        Write-OK "$skillsInstaladas skill(s) instaladas en ~\.claude\skills"
-        Write-Dim "Se activan solas cuando hacen falta; tambien con /nombre-de-la-skill"
-    } else {
-        Write-Dim "No se instalaron skills nuevas."
-    }
-    $status["skills"] = "OK"
+    if ($skillsErrores -gt 0) { $status['skills'] = 'ERROR' }
+    elseif ($skillsElegidas -eq 0) { $status['skills'] = 'SALTADO' }
+    else { $status['skills'] = "OK - $skillsInstaladas nuevas" }
 }
 
 # ============================================================
@@ -1249,7 +1298,7 @@ $conexiones = @{}
 Write-Info "GitHub CLI (gh)..."
 try {
     $ghs = (gh auth status 2>&1) | Out-String
-    if ($ghs -match "Logged in") { Write-OK "GitHub CLI: Conectado"; $conexiones["GitHub CLI"] = "OK" } else { throw }
+    if ($LASTEXITCODE -eq 0) { Write-OK "GitHub CLI: Conectado"; $conexiones["GitHub CLI"] = "OK" } else { throw }
 } catch {
     Write-Warn "GitHub CLI: No conectado"
     $conexiones["GitHub CLI"] = "PENDIENTE"
@@ -1265,7 +1314,7 @@ try {
             gh auth login
             try {
                 $check = (gh auth status 2>&1) | Out-String
-                if ($check -match "Logged in") { Write-OK "GitHub CLI conectado!"; $conexiones["GitHub CLI"] = "OK" }
+                if ($LASTEXITCODE -eq 0) { Write-OK "GitHub CLI conectado!"; $conexiones["GitHub CLI"] = "OK" }
             } catch {}
         }
     }
@@ -1275,43 +1324,13 @@ try {
 Write-Host ""
 Write-Separador
 Write-Info "Claude MCP — GitHub server..."
-try {
-    $mcp = (claude mcp list 2>&1) | Out-String
-    if ($mcp -match "github") { Write-OK "Claude MCP GitHub: Configurado"; $conexiones["Claude MCP"] = "OK" } else { throw }
-} catch {
-    Write-Warn "Claude MCP GitHub: No configurado"
-    $conexiones["Claude MCP"] = "PENDIENTE"
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        Write-Host ""
-        Write-Host "  El MCP de GitHub conecta Claude Code con tus repos." -ForegroundColor White
-        Write-Host "  Permite crear repos, leer issues, hacer PRs desde Claude." -ForegroundColor White
-        Write-Host ""
-        Write-Host "  Necesitas un Personal Access Token de GitHub:" -ForegroundColor Cyan
-        Write-Host "    1. Inicia sesion en github.com" -ForegroundColor White
-        Write-Host "    2. Settings > Developer settings" -ForegroundColor White
-        Write-Host "    3. Personal access tokens > Tokens (classic)" -ForegroundColor White
-        Write-Host "    4. Generate new token (classic)" -ForegroundColor White
-        Write-Host "    5. Nombre: 'Claude Code MCP', permiso: repo (completo)" -ForegroundColor White
-        Write-Host "    6. Generate token y copiarlo" -ForegroundColor White
-        Write-Host ""
-        if (Ask-SN "Ya tenes tu token? Configurar ahora?") {
-            Write-Host ""
-            $token = Read-Host "  Pega tu token de GitHub aqui"
-            if ($token -and $token.Length -gt 10) {
-                Write-Info "Configurando variable de entorno GITHUB_PERSONAL_ACCESS_TOKEN..."
-                [System.Environment]::SetEnvironmentVariable("GITHUB_PERSONAL_ACCESS_TOKEN", $token, "User")
-                $env:GITHUB_PERSONAL_ACCESS_TOKEN = $token
-                Write-Info "Registrando MCP server de GitHub en Claude Code..."
-                claude mcp add github -s user -- npx -y @modelcontextprotocol/server-github 2>&1 | ForEach-Object { Write-Host "  $_" }
-                try {
-                    $checkMcp = (claude mcp list 2>&1) | Out-String
-                    if ($checkMcp -match "github") { Write-OK "Claude MCP GitHub configurado!"; $conexiones["Claude MCP"] = "OK" }
-                    else { Write-Warn "Configurado pero no aparece en la lista. Reinicia Claude Code." }
-                } catch {}
-            } else { Write-Warn "Token invalido o vacio." }
-        }
-    }
-}
+$conexiones['Claude MCP'] = 'OPCIONAL - MANUAL'
+Write-Info 'GitHub CLI ya permite trabajar con repositorios desde Claude Code.'
+Write-Dim 'El MCP es opcional; la Forja no solicita ni guarda tokens de GitHub.'
+Write-Dim 'Configura el servidor mantenido por GitHub siguiendo su guia oficial:'
+Write-Dim 'https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md'
+Write-Dim 'Limita repositorios, permisos y herramientas; empeza en modo solo lectura.'
+Write-Warn 'Si usaste v6.0: revisa el PAT anterior y GITHUB_PERSONAL_ACCESS_TOKEN. Ver SECURITY.md.'
 
 # --- NETLIFY ---
 Write-Host ""
@@ -1319,7 +1338,7 @@ Write-Separador
 Write-Info "Netlify..."
 try {
     $ns = (netlify status 2>&1) | Out-String
-    if ($ns -match "Logged in|Email:") { Write-OK "Netlify: Conectado"; $conexiones["Netlify"] = "OK" } else { throw }
+    if ($LASTEXITCODE -eq 0 -and $ns -match "Logged in|Email:") { Write-OK "Netlify: Conectado"; $conexiones["Netlify"] = "OK" } else { throw }
 } catch {
     Write-Warn "Netlify: No conectado"
     $conexiones["Netlify"] = "PENDIENTE"
@@ -1332,7 +1351,7 @@ try {
             netlify login
             try {
                 $nc = (netlify status 2>&1) | Out-String
-                if ($nc -match "Logged in|Email:") { Write-OK "Netlify conectado!"; $conexiones["Netlify"] = "OK" }
+                if ($LASTEXITCODE -eq 0 -and $nc -match "Logged in|Email:") { Write-OK "Netlify conectado!"; $conexiones["Netlify"] = "OK" }
             } catch {}
         }
     }
@@ -1344,7 +1363,7 @@ Write-Separador
 Write-Info "Vercel..."
 try {
     $vs = (vercel whoami 2>&1) | Out-String
-    if ($vs -match "\w" -and $vs -notmatch "Error|not logged|No user") {
+    if ($LASTEXITCODE -eq 0 -and $vs -match "\w" -and $vs -notmatch "Error|not logged|No user") {
         Write-OK "Vercel: Conectado como $($vs.Trim())"
         $conexiones["Vercel"] = "OK"
     } else { throw }
@@ -1360,7 +1379,7 @@ try {
             vercel login
             try {
                 $vc = (vercel whoami 2>&1) | Out-String
-                if ($vc -match "\w" -and $vc -notmatch "Error") { Write-OK "Vercel conectado!"; $conexiones["Vercel"] = "OK" }
+                if ($LASTEXITCODE -eq 0 -and $vc -match "\w" -and $vc -notmatch "Error") { Write-OK "Vercel conectado!"; $conexiones["Vercel"] = "OK" }
             } catch {}
         }
     }
@@ -1372,7 +1391,7 @@ Write-Separador
 Write-Info "Supabase..."
 try {
     $ss = (supabase projects list 2>&1) | Out-String
-    if ($ss -match "Name|ID" -and $ss -notmatch "error|not logged") {
+    if ($LASTEXITCODE -eq 0 -and $ss -match "Name|ID" -and $ss -notmatch "error|not logged") {
         Write-OK "Supabase: Conectado"
         $conexiones["Supabase"] = "OK"
     } else { throw }
@@ -1388,7 +1407,7 @@ try {
             supabase login
             try {
                 $sc = (supabase projects list 2>&1) | Out-String
-                if ($sc -match "Name|ID") { Write-OK "Supabase conectado!"; $conexiones["Supabase"] = "OK" }
+                if ($LASTEXITCODE -eq 0 -and $sc -match "Name|ID") { Write-OK "Supabase conectado!"; $conexiones["Supabase"] = "OK" }
             } catch {}
         }
     }
@@ -1398,31 +1417,16 @@ try {
 Write-Host ""
 Write-Separador
 Write-Info "Snyk..."
-try {
-    $sks = (snyk config get api 2>&1) | Out-String
-    if ($sks -match "[a-f0-9\-]{20,}") {
-        Write-OK "Snyk: Conectado (token configurado)"
-        $conexiones["Snyk"] = "OK"
-    } else { throw }
-} catch {
-    Write-Warn "Snyk: No conectado"
-    $conexiones["Snyk"] = "PENDIENTE"
-    if (Get-Command snyk -ErrorAction SilentlyContinue) {
-        Write-Host ""
-        Write-Host "  Escanea vulnerabilidades: snyk test" -ForegroundColor White
-        Write-Host "  Token en: https://app.snyk.io/account > Auth Token" -ForegroundColor Cyan
-        Write-Host ""
-        if (Ask-SN "Tenes tu token de Snyk? Configurarlo ahora?") {
-            $snykToken = Read-Host "  Pega tu token de Snyk aqui"
-            if ($snykToken -and $snykToken.Length -gt 10) {
-                snyk config set api=$snykToken 2>&1 | Out-Null
-                $verify = (snyk config get api 2>&1) | Out-String
-                if ($verify -match "[a-f0-9\-]{20,}") { Write-OK "Snyk conectado!"; $conexiones["Snyk"] = "OK" }
-                else { Write-Warn "No se pudo guardar. Intenta: snyk config set api=TU_TOKEN" }
-            } else { Write-Warn "Token vacio." }
-        }
+$conexiones['Snyk'] = 'PENDIENTE'
+if (Get-Command snyk -ErrorAction SilentlyContinue) {
+    if (Test-SnykAuth) { Write-OK 'Snyk: conectado'; $conexiones['Snyk'] = 'OK' }
+    elseif (Ask-SN 'Conectar Snyk por navegador (OAuth)?') {
+        snyk auth
+        if ($LASTEXITCODE -eq 0 -and (Test-SnykAuth)) {
+            Write-OK 'Snyk conectado!'; $conexiones['Snyk'] = 'OK'
+        } else { Write-Warn 'No se pudo verificar Snyk. Revisa snyk auth en una terminal nueva.' }
     }
-}
+} else { Write-Warn 'Snyk no disponible.' }
 
 # --- DOCKER ---
 Write-Host ""
@@ -1430,7 +1434,7 @@ Write-Separador
 Write-Info "Docker..."
 try {
     $ds = (docker info 2>&1) | Out-String
-    if ($ds -match "Server Version") { Write-OK "Docker: Funcionando"; $conexiones["Docker"] = "OK" } else { throw }
+    if ($LASTEXITCODE -eq 0 -and $ds -match "Server Version") { Write-OK "Docker: Funcionando"; $conexiones["Docker"] = "OK" } else { throw }
 } catch {
     Write-Warn "Docker: No esta corriendo"
     $conexiones["Docker"] = "PENDIENTE"
@@ -1454,6 +1458,8 @@ foreach ($key in @("GitHub CLI","Claude MCP","Netlify","Vercel","Supabase","Snyk
     $val = $conexiones[$key]
     if ($val -eq "OK") {
         Write-Host "  [OK] $key" -ForegroundColor Green
+    } elseif ($val -like 'OPCIONAL*') {
+        Write-Dim "$key - $val"
     } else {
         Write-Host "  [!!] $key - PENDIENTE" -ForegroundColor Red
         $pendientes++
@@ -1471,7 +1477,7 @@ if ($pendientes -gt 0) {
 } else {
     Write-Host ""
     Write-Host "  *** TODAS LAS CONEXIONES ESTAN ACTIVAS ***" -ForegroundColor Green
-    Write-Host "  Tu estacion de trabajo esta 100% lista." -ForegroundColor Green
+    Write-Host "  Las conexiones verificadas estan disponibles. Revisa tambien el resumen de instalacion." -ForegroundColor Green
     Write-Host ""
 }
 
@@ -1513,3 +1519,5 @@ Write-Host ""
 Write-Section "============================================================"
 Write-Host ""
 Read-Host "  Presiona ENTER para cerrar"
+
+if (@($status.Values | Where-Object { $_ -match '^ERROR' }).Count -gt 0) { exit 1 }; exit 0
