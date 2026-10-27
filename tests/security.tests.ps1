@@ -257,7 +257,7 @@ try {
     Assert ($scriptText -notmatch 'SetEnvironmentVariable|Read-Host[^\r\n]*token|snyk config set|npx -y @modelcontextprotocol') 'sin captura ni persistencia propia de tokens'
     Assert ($scriptText -notmatch 'getadmin\.vbs|forja_setup\.ps1|ExecutionPolicy Bypass|Rename-Item|Start-Process cmd') 'sin bootstrap temporal ni borrados de instalaciones'
     $elevations = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Start-Process' -and $node.Extent.Text -match '-Verb RunAs' }, $true))
-    Assert ($elevations.Count -eq 1 -and $elevations[0].Extent.Text.Contains('$wslExe')) 'elevacion limitada a WSL con argumentos fijos'
+    Assert ($elevations.Count -eq 2 -and @($elevations | Where-Object { $_.Extent.Text.Contains('$wslExe') }).Count -eq 1 -and @($elevations | Where-Object { $_.Extent.Text.Contains('$installer') }).Count -eq 1) 'elevacion limitada a WSL y al MSI verificado'
     $adminGuard = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text -match '^if \(\$principal.IsInRole' }, $true))
     Assert ($adminGuard.Count -eq 1 -and $adminGuard[0].Extent.Text.Contains('exit 1') -and $adminGuard[0].Extent.StartOffset -lt $scriptText.IndexOf('$modoSel =')) 'guard de administrador detiene el producto antes del menu'
     Write-Host "RESULTADO: $passed PASS / 0 FAIL"

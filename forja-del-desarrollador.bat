@@ -21,7 +21,7 @@ exit /b %FORJA_EXIT_CODE%
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v6.1.2"
+$VERSION = "v6.1.3"
 # Ni npm, ni skills, ni conexiones deben heredar privilegios de administrador.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -193,9 +193,15 @@ function Get-ForjaTree { param([string]$Root)
         }
     }
 }
-function New-ForjaWorkspace {
-    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible.' }
-    $base = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Forja\Staging'))
+function New-ForjaWorkspace { param([switch]$Installer)
+    if ($Installer) {
+        if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) { throw 'USERPROFILE no disponible.' }
+        # Documentos evita la redireccion de AppData al ejecutar un MSI elevado.
+        $base = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE 'Documents\Forja\Staging'))
+    } else {
+        if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible.' }
+        $base = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Forja\Staging'))
+    }
     Assert-NoReparsePath $base
     [IO.Directory]::CreateDirectory($base) | Out-Null
     $path = Join-Path $base ([guid]::NewGuid().ToString('N'))
@@ -329,6 +335,97 @@ function Get-MongoshPreviousFailure { param([string]$Version)
     } catch { Write-Dim 'No se pudo consultar el ultimo log de mongosh.' }
     return $null
 }
+
+function Get-MongoshRepairPackage { param([string]$Version)
+    # Version y huella verificadas contra el manifiesto oficial de WinGet.
+    # Una version futura requiere una nueva revision del catalogo de reparacion.
+    if ($Version -ne '2.14.0') { return $null }
+    return [pscustomobject]@{
+        Version='2.14.0'
+        Uri='https://downloads.mongodb.com/compass/mongosh-2.14.0-x64.msi'
+        Sha256='0C433D1C06D0A8377997DA39775C537B0C9A4AD639DCDEA7EDF8B594872516C1'
+    }
+}
+function Test-ForjaRepairAccount {
+    # WindowsIdentity.Groups omite grupos deny-only en algunos tokens UAC.
+    # whoami conserva esos SID; no depende del nombre traducido del grupo.
+    try {
+        $whoami=Join-Path ([Environment]::SystemDirectory) 'whoami.exe'
+        $groups=& $whoami /groups /fo csv /nh 2>$null | Out-String
+        if ($LASTEXITCODE -ne 0) { return $false }
+        return (Test-ForjaAdminGroupList $groups)
+    } catch { return $false }
+}
+function Test-ForjaAdminGroupList { param([string]$Csv)
+    $rows=$Csv | ConvertFrom-Csv -Header Name,Type,Sid,Attributes -ErrorAction Stop
+    return (@($rows | Where-Object { $_.Sid -eq 'S-1-5-32-544' }).Count -gt 0)
+}
+function Save-ForjaRepairPackage { param([string]$Uri,[string]$Destination)
+    if ($Uri -ne 'https://downloads.mongodb.com/compass/mongosh-2.14.0-x64.msi') { throw 'Origen de reparacion no permitido.' }
+    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 120 -ErrorAction Stop | Out-Null
+}
+function Test-MongoshRuntime { param([string]$Version)
+    $command=Get-Command mongosh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) { return $false }
+    $output=& $command.Source --norc --version 2>&1 | Out-String
+    return ($LASTEXITCODE -eq 0 -and $output.Trim() -eq $Version)
+}
+function Invoke-MongoshRepair { param([string]$Version)
+    $package=Get-MongoshRepairPackage $Version
+    if (-not $package) { Write-Warn 'Esta version no tiene un MSI de reparacion revisado. Se deja pendiente.'; return 'pendiente' }
+    if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+        Write-Warn 'El MSI revisado es para Windows x64. Se deja pendiente.'; return 'pendiente'
+    }
+    if (-not (Test-ForjaRepairAccount)) { Write-Warn 'La reparacion requiere UAC de la misma cuenta administradora. Se deja pendiente.'; return 'pendiente' }
+    if (Test-MongoshBusy) { Write-Warn 'Cerra mongosh antes de reparar.'; return 'pendiente' }
+    $workspace=$null; $stream=$null; $verified=$false; $trusted=$false
+    try {
+        $workspace=New-ForjaWorkspace -Installer
+        $msi=Join-Path $workspace 'mongosh-2.14.0-x64.msi'
+        $log=Join-Path $workspace 'repair.log'
+        Write-Info 'Descargando el MSI oficial de MongoDB Shell para verificarlo...'
+        Save-ForjaRepairPackage $package.Uri $msi
+        Assert-NoReparsePath $msi
+        # Mantener el archivo bloqueado contra escritura/reemplazo desde el hash
+        # hasta que termine Windows Installer, inclusive durante el dialogo UAC.
+        $stream=[IO.File]::Open($msi,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        $hash=(Get-FileHash -InputStream $stream -Algorithm SHA256 -ErrorAction Stop).Hash
+        if ($hash -cne $package.Sha256) { throw 'La huella SHA-256 no coincide. No se ejecuta el MSI.' }
+        $signature=Get-AuthenticodeSignature -LiteralPath $msi -ErrorAction Stop
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?i)\bMongoDB\b') {
+            throw 'No se pudo validar la firma de MongoDB. No se ejecuta el MSI.'
+        }
+        $trusted=$true
+        $installer=Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
+        Write-Info "MSI $Version verificado. UAC eleva solo Windows Installer; la Forja sigue sin elevar."
+        $arguments=@('/i',('"'+$msi+'"'),'/passive','/norestart','/L*v',('"'+$log+'"'))
+        $process=Start-Process -FilePath $installer -ArgumentList $arguments -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        if ($process.ExitCode -eq 3010) { Write-Warn 'MSI completado; requiere reiniciar y verificar. No se reinicia automaticamente.'; return 'pendiente' }
+        if ($process.ExitCode -ne 0) { Write-Warn "La reparacion MSI fallo con codigo $($process.ExitCode). Log: $log"; return 'error' }
+        $script:ForjaWingetInventory=$null
+        $after=Get-WingetPackageInfo 'MongoDB.Shell'
+        if ($after.State -ne 'installed' -or $after.Version -ne $Version) {
+            Write-Warn "MSI completado pero falta confirmar la version $Version en WinGet. Log: $log"; return 'pendiente'
+        }
+        Write-Info 'Verificando mongosh sin cargar scripts de inicio ni conectar a una base...'
+        if (-not (Test-MongoshRuntime $Version)) { Write-Warn 'La version de mongosh no se pudo confirmar en esta terminal. Se deja pendiente.'; return 'pendiente' }
+        $verified=$true
+        Write-OK "mongosh reparado y version instalada confirmada: $Version."
+        return 'ok'
+    } catch [ComponentModel.Win32Exception] {
+        if ($_.Exception.NativeErrorCode -eq 1223) { Write-Warn 'Reparacion cancelada en UAC. Se deja pendiente.'; return 'pendiente' }
+        Write-Warn 'No se pudo iniciar Windows Installer. La reparacion queda pendiente.'; return 'pendiente'
+    } catch { Write-Warn "Reparacion de mongosh: $($_.Exception.Message)"; return 'error' }
+    finally {
+        if ($stream) { $stream.Dispose() }
+        if ($workspace) {
+            if ($verified -or -not $trusted) {
+                try { Remove-ForjaWorkspace $workspace } catch { Write-Dim "Temporal retenido: $workspace" }
+            } else { Write-Dim "Archivos de diagnostico conservados: $workspace" }
+        }
+    }
+}
+
 function Get-InstallerFailureDetail { param([string]$Output)
     $detail=''
     if ($Output -match '(?i)exit code:\s*(\d+)') { $detail="Instalador: codigo $($Matches[1])." }
@@ -357,15 +454,19 @@ function Invoke-ForjaPython { param([string]$Executable)
     catch { Write-Warn "No se pudo ejecutar Python ($($_.Exception.GetType().Name))."; $code=-1 }
     $global:LASTEXITCODE=$code
 }
-function Invoke-ForjaPythonLibraries { param([switch]$Update)
+function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShared)
     $result=[pscustomobject]@{ State='error'; SharedConflict=$false; Environment=$null }
     $base=Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $base) { Write-Warn 'Python no disponible.'; $result.State='saltado'; return $result }
-    $shared=Invoke-ForjaPython $base.Source -m pip check 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        $result.SharedConflict=$true
-        Write-Warn 'El Python compartido tiene dependencias incompatibles o no pudo verificarse. La Forja no lo modifica.'
-        $shared.Trim() -split '\r?\n' | Select-Object -First 8 | ForEach-Object { Write-Dim $_ }
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { Write-Warn 'LOCALAPPDATA no disponible.'; return $result }
+    $expectedVenv=Join-Path $env:LOCALAPPDATA 'Forja\Python\venv'
+    if ($CheckShared -or -not (Test-Path -LiteralPath $expectedVenv)) {
+        $shared=Invoke-ForjaPython $base.Source -m pip check 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            $result.SharedConflict=$true
+            Write-Warn 'El Python compartido tiene dependencias incompatibles o no pudo verificarse. La Forja no lo modifica.'
+            $shared.Trim() -split '\r?\n' | Select-Object -First 8 | ForEach-Object { Write-Dim $_ }
+        }
     }
     try {
         if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible' }
@@ -512,7 +613,9 @@ if ($modoSel -eq "2") {
             $previousFailure=Get-MongoshPreviousFailure $info.Available
             if ($previousFailure) {
                 Write-Warn "El ultimo intento de esta version fallo con MSI 1304 al escribir archivos. Log: $previousFailure"
-                if (-not (Ask-SN 'Reintentar mongosh despues de revisar el bloqueo?')) { return 'pendiente' }
+                Write-Info 'La reparacion usa solo el MSI oficial con SHA-256 y firma verificados. Puede pedir UAC para ese paquete.'
+                if (Ask-SN 'Reparar mongosh con Windows Installer y permisos para este paso?') { return (Invoke-MongoshRepair $info.Available) }
+                return 'pendiente'
             }
         }
         $installerOutput=New-Object 'System.Collections.Generic.List[string]'
@@ -531,7 +634,11 @@ if ($modoSel -eq "2") {
             return 'error'
         }
         $detail=Get-InstallerFailureDetail ($installerOutput -join "`n")
-        Write-Warn "${nombre}: fallo WinGet $codigo. $detail Se continua con los demas paquetes."
+        Write-Warn "${nombre}: fallo WinGet $codigo. $detail"
+        if ($id -eq 'MongoDB.Shell' -and $detail -match 'MSI 1304') {
+            if (Ask-SN 'Intentar reparacion con el MSI oficial verificado y UAC solo para este paquete?') { return (Invoke-MongoshRepair $info.Available) }
+            return 'pendiente'
+        }
         return 'error'
     }
 

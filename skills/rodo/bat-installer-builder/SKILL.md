@@ -7,7 +7,7 @@ description: Construye y revisa instaladores BAT para Windows con arranque hibri
 > Distribuida con [La Forja del Desarrollador](https://github.com/ragustingarcia/la-forja-del-desarrollador).
 > Si la adaptás o redistribuís, conservá este crédito. ¡Gracias!
 
-# Constructor de instaladores BAT | v6.1.2
+# Constructor de instaladores BAT | v6.1.3
 
 ## Alcance
 
@@ -67,6 +67,10 @@ return ($code -eq 0)
 14. Distinguir avisos npm de fallos y comprobar la CLI instalada. No agregar aprobaciones globales
     de scripts para hacer desaparecer advertencias. Un MSI fallido debe conservar su diagnóstico,
     sin cerrar procesos, borrar instalaciones ni modificar permisos automáticamente.
+15. Una reparación elevada debe quedar limitada a un instalador concreto, con confirmación,
+    URL permitida, hash fijado y firma válida. Mantener el archivo bloqueado contra escritura
+    entre la verificación y la ejecución. No elevar el BAT completo; no reiniciar automáticamente.
+    Verificar tanto el registro del gestor como la versión del ejecutable al terminar.
 
 ## Consentimiento y credenciales
 

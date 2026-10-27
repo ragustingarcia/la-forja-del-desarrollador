@@ -58,7 +58,8 @@ try {
         $script:calls=@();$script:installed=$false
         if ($case -in @('healthy','shared-conflict','install-failure','dependency-conflict','import-failure','system-site-packages')) { New-FixtureVenv }
         if ($case -eq 'incomplete') { [IO.Directory]::CreateDirectory((Join-Path $env:LOCALAPPDATA 'Forja\Python\venv')) | Out-Null }
-        $result=@(Invoke-ForjaPythonLibraries -Update)
+        if ($case -eq 'shared-conflict') { $result=@(Invoke-ForjaPythonLibraries -Update -CheckShared) }
+        else { $result=@(Invoke-ForjaPythonLibraries -Update) }
         if ($result.Count -ne 1) { throw 'Python retorna salida adicional al estado' }
         $expected='aldia'
         if ($case -in @('install-failure','dependency-conflict','import-failure','system-site-packages','incomplete')) { $expected='error' }
@@ -66,6 +67,7 @@ try {
         if ($case -eq 'new-environment') { $expected='ok' }
         if ($result[0].State -ne $expected) { throw "$case : $($result[0].State) esperado $expected" }
         if ($case -eq 'shared-conflict' -and -not $result[0].SharedConflict) { throw 'Se oculto el conflicto compartido' }
+        if ($case -eq 'healthy' -and @($script:calls | Where-Object { $_.Executable -eq 'C:\fixture\base-python.exe' -and $_.Arguments -contains 'check' }).Count) { throw 'Se inspecciono Python compartido sin pedir diagnostico' }
         if (@($script:calls | Where-Object { $_.Executable -eq 'C:\fixture\base-python.exe' -and $_.Arguments -contains 'install' }).Count) { throw 'Instalacion global detectada' }
         if ($case -in @('system-site-packages','incomplete','decline','no-python') -and @($script:calls | Where-Object {$_.Arguments -contains 'install'}).Count) { throw 'Se instalo en entorno no validado' }
         $passed++;Write-Host "PASS Python $case / $expected / sin pip install global"

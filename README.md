@@ -181,6 +181,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v6.1.3 | Reparación opcional de mongosh mediante su MSI oficial verificado y UAC limitado al instalador; validación de versión registrada y ejecutable; los avisos del Python compartido no se repiten cuando el entorno de Forja ya existe. Reparación real confirmada en 2.14.0. [Detalle](docs/CORRECCION-v6.1.3.md) |
 | v6.1.2 | Corrige los contadores del resumen; aísla las librerías Python de Forja y verifica dependencias/imports; distingue avisos npm de fallos y verifica las CLIs; muestra el diagnóstico MSI de mongosh y evita reintentos de fallos conocidos sin confirmación. [Detalle](docs/CORRECCION-v6.1.2.md) |
 | v6.1.1 | Corrige la segunda pasada de WinGet, muestra versiones instaladas, reconoce PowerShell desde el inventario general, usa ejecutables `.exe`/`.cmd` para CLIs npm y continúa ante una limpieza fallida de Claude. Agrega pruebas nativas bajo política Restricted. [Detalle](docs/CORRECCION-v6.1.1.md) |
 | v6.1 | **Seguridad**: sin elevación global ni bootstrap temporal; inicio con Windows PowerShell 5.1; diagnóstico; confirmación explícita; sin captura de tokens; skills por SHA fijo, sin enlaces ni sobrescrituras; verificación de fallos y pruebas Windows en CI |

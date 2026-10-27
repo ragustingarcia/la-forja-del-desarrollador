@@ -3,7 +3,7 @@ message: "Si usás o compartís esta herramienta, citala así."
 title: "La Forja del Desarrollador"
 abstract: "Setup completo para desarrollar con Claude Code en Windows: 21 herramientas instaladas, configuradas y vinculadas en un solo script."
 type: software
-version: "6.1.2"
+version: "6.1.3"
 date-released: 2026-10-27
 url: "https://github.com/ragustingarcia/la-forja-del-desarrollador"
 repository-code: "https://github.com/ragustingarcia/la-forja-del-desarrollador"
