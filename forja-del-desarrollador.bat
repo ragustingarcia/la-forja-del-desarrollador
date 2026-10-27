@@ -33,7 +33,7 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
 Set-Location -LiteralPath (Join-Path $env:SystemRoot 'System32')
 $script:ForjaWorkspaces = @{}
 $script:ForjaWingetInventory = $null
-$ForjaSkillsRevision = '83856c28601af0c07eae5958b36b08dfe85c09e1'
+$ForjaSkillsRevision = 'c794d9488a1e8274af08b5c90f9dcfa96ec73580'
 $AnthropicSkillsRevision = 'dbd4588f9e1033efb41dad4bef2f7947c8993d44'
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
