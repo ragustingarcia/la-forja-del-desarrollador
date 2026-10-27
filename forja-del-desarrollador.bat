@@ -30,7 +30,7 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
 # Evitar resolucion de herramientas/configuracion desde el directorio descargado.
 Set-Location -LiteralPath (Join-Path $env:SystemRoot 'System32')
 $script:ForjaWorkspaces = @{}
-$ForjaSkillsRevision = '39204a10fc5ce3027a3180cc69446266f9cefe7a'
+$ForjaSkillsRevision = 'bd63bedfb8d2244212e2b48595cfa44e994f6a71'
 $AnthropicSkillsRevision = 'dbd4588f9e1033efb41dad4bef2f7947c8993d44'
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
