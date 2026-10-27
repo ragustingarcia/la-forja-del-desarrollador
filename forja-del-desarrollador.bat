@@ -69,6 +69,153 @@ function Test-NpmPkg { param($pkg)
     try { $o = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match ([regex]::Escape($pkg) + "@")) { return $true } } catch {}
     return $false
 }
+function Format-ForjaProgress {param([string]$Label,[long]$Bytes=0,[long]$Total=-1,[int]$Frame=0,[switch]$Completed,[switch]$Failed)
+    $name=$Label;if($name.Length -gt 24){$name=$name.Substring(0,21)+'...'}
+    $cells=20
+    if($Failed){return ('  '+$name+' ['+('!'*$cells)+'] Interrumpido')}
+    if($Total -gt 0){
+        $percent=[int][Math]::Floor(([double]$Bytes/$Total)*100);$percent=[Math]::Max(0,[Math]::Min(100,$percent))
+        if(-not $Completed){$percent=[Math]::Min(99,$percent)}
+        $filled=[int][Math]::Floor($percent*$cells/100)
+        return ('  {0} [{1}{2}] {3,3}% {4:0.0}/{5:0.0} MB' -f $name,('#'*$filled),('-'*($cells-$filled)),$percent,($Bytes/1MB),($Total/1MB))
+    }
+    if($Completed){return ('  '+$name+' ['+('#'*$cells)+'] Etapa finalizada')}
+    $position=$Frame % ($cells-3)
+    $bar=('-'*$position)+'###'+('-'*($cells-3-$position))
+    $detail='en curso';if($Bytes -gt 0){$detail=('{0:0.0} MB; total no informado' -f ($Bytes/1MB))}
+    return ('  '+$name+' ['+$bar+'] '+$detail)
+}
+function Write-ForjaProgress {param([string]$Label,[long]$Bytes=0,[long]$Total=-1,[int]$Frame=0,[switch]$Completed,[switch]$Failed)
+    $line=Format-ForjaProgress @PSBoundParameters
+    if([Console]::IsOutputRedirected){if($Frame -eq 0 -or $Completed -or $Failed){Write-Host $line};return}
+    $width=(Get-ForjaConsoleSize).Width
+    if($line.Length -ge $width){$line=$line.Substring(0,$width-1)}
+    Write-Host ("`r"+$line.PadRight($width-1)) -NoNewline -ForegroundColor Cyan
+    if($Completed -or $Failed){Write-Host ''}
+}
+function Copy-ForjaDownloadStream {param([IO.Stream]$Source,[string]$Destination,[long]$Total=-1,[string]$Label='Descargando')
+    Assert-NoReparsePath $Destination
+    $file=$null;$bytes=[long]0;$frame=0;$watch=[Diagnostics.Stopwatch]::StartNew();$last=[long]-1000
+    try {
+        $file=[IO.File]::Open($Destination,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $buffer=New-Object byte[] 65536
+        Write-ForjaProgress -Label $Label -Total $Total -Frame 0
+        while($true){
+            $cancel=New-Object Threading.CancellationTokenSource
+            try {$cancel.CancelAfter(120000);$read=$Source.ReadAsync($buffer,0,$buffer.Length,$cancel.Token).GetAwaiter().GetResult()}
+            finally {$cancel.Dispose()}
+            if($read -eq 0){break}
+            $bytes+=$read
+            if($bytes -gt 2147483648 -or ($Total -gt 0 -and $bytes -gt $Total)){throw 'La descarga supera el tamano esperado.'}
+            $file.Write($buffer,0,$read)
+            if(($watch.ElapsedMilliseconds-$last) -ge 200){$frame++;Write-ForjaProgress -Label $Label -Bytes $bytes -Total $Total -Frame $frame;$last=$watch.ElapsedMilliseconds}
+        }
+        if($bytes -eq 0 -or ($Total -gt 0 -and $bytes -ne $Total)){throw 'La descarga esta vacia o incompleta.'}
+        $file.Flush()
+        Write-ForjaProgress -Label $Label -Bytes $bytes -Total $Total -Frame ($frame+1) -Completed
+    } catch {Write-ForjaProgress -Label $Label -Bytes $bytes -Total $Total -Frame ($frame+1) -Failed;throw}
+    finally {if($file){$file.Dispose()};$watch.Stop()}
+}
+function Save-ForjaDownload {param([string]$Uri,[string]$Destination,[string]$Label='Descargando',[switch]$NoRedirect)
+    Add-Type -AssemblyName System.Net.Http
+    $handler=New-Object Net.Http.HttpClientHandler;$handler.AllowAutoRedirect=$false;$handler.UseDefaultCredentials=$false
+    $client=New-Object Net.Http.HttpClient($handler);$client.Timeout=[TimeSpan]::FromSeconds(120)
+    $response=$null;$stream=$null
+    try {
+        $current=[uri]$Uri
+        for($redirect=0;$redirect -le 5;$redirect++){
+            if($current.Scheme -ne 'https' -or $current.UserInfo){throw 'La descarga requiere HTTPS sin credenciales en la URL.'}
+            $response=$client.GetAsync($current,[Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            $status=[int]$response.StatusCode
+            if($status -ge 300 -and $status -lt 400){
+                if($NoRedirect -or $redirect -eq 5 -or -not $response.Headers.Location){throw 'Redireccion de descarga no permitida.'}
+                $current=New-Object uri($current,$response.Headers.Location);$response.Dispose();$response=$null;continue
+            }
+            $null=$response.EnsureSuccessStatusCode();break
+        }
+        $total=[long]-1;if($null -ne $response.Content.Headers.ContentLength){$total=[long]$response.Content.Headers.ContentLength}
+        if($total -gt 2147483648){throw 'Archivo demasiado grande.'}
+        $stream=$response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        Copy-ForjaDownloadStream $stream $Destination $total $Label
+    } finally {if($stream){$stream.Dispose()};if($response){$response.Dispose()};$client.Dispose();$handler.Dispose()}
+}
+function ConvertTo-ForjaNativeArgument {param([AllowEmptyString()][string]$Value)
+    if($Value -and $Value -notmatch '[\s"]'){return $Value}
+    return ('"'+(($Value -replace '(\\*)"','$1$1\"') -replace '(\\+)$','$1$1')+'"')
+}
+function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$ArgumentList,[string]$Label='Instalando')
+    $process=$null;$frame=0
+    try {
+        # npm se ejecuta con Node directamente: no hay cmd /c ni interpolacion de rutas.
+        if([IO.Path]::GetFileName($Executable) -ieq 'npm.cmd'){
+            $npmScript=Join-Path (Split-Path $Executable -Parent) 'node_modules\npm\bin\npm-cli.js'
+            $node=Join-Path (Split-Path $Executable -Parent) 'node.exe'
+            if(-not (Test-Path -LiteralPath $node -PathType Leaf)){$command=Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1;$node=$command.Source}
+            if(-not (Test-Path -LiteralPath $npmScript -PathType Leaf)){throw 'No se encontro npm-cli.js junto a npm.cmd.'}
+            $Executable=$node;$ArgumentList=@($npmScript)+$ArgumentList
+        }
+        if(-not [IO.Path]::IsPathRooted($Executable) -or [IO.Path]::GetExtension($Executable) -ine '.exe'){throw 'Ejecutable nativo absoluto requerido.'}
+        $psi=New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName=$Executable;$psi.Arguments=(@($ArgumentList | ForEach-Object {ConvertTo-ForjaNativeArgument $_}) -join ' ')
+        $psi.WorkingDirectory=[Environment]::SystemDirectory
+        $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
+        $process=New-Object Diagnostics.Process;$process.StartInfo=$psi
+        Write-ForjaProgress -Label $Label -Frame 0
+        $null=$process.Start()
+        $readers=@(
+            [pscustomobject]@{Reader=$process.StandardOutput;Pending=$process.StandardOutput.ReadLineAsync();Closed=$false},
+            [pscustomobject]@{Reader=$process.StandardError;Pending=$process.StandardError.ReadLineAsync();Closed=$false}
+        )
+        $captured=New-Object 'System.Collections.Generic.List[string]'
+        $afterExit=$null;$phase=$Label
+        do {
+            foreach($reader in $readers){
+                $batch=0
+                while(-not $reader.Closed -and $reader.Pending.IsCompleted -and $batch -lt 1000){
+                    try {$line=$reader.Pending.GetAwaiter().GetResult()}
+                    catch {$reader.Closed=$true;break}
+                    if($null -eq $line){$reader.Closed=$true;break}
+                    $captured.Add($line);$batch++
+                    if($line -match '(?i)Downloading|Descargando'){$phase='Descargando '+$Label}
+                    elseif($line -match '(?i)Starting package install|Iniciando.*instal|Installing|Instalando'){$phase='Instalando '+$Label}
+                    $reader.Pending=$reader.Reader.ReadLineAsync()
+                }
+            }
+            if($process.HasExited){
+                if(-not $afterExit){$afterExit=[Diagnostics.Stopwatch]::StartNew()}
+                if(@($readers | Where-Object {-not $_.Closed}).Count -eq 0 -or $afterExit.ElapsedMilliseconds -ge 5000){break}
+                [Threading.Thread]::Sleep(50)
+            } else {$null=$process.WaitForExit(150)}
+            $frame++;Write-ForjaProgress -Label $phase -Frame $frame
+        } while($true)
+        # Un proceso que el proveedor deja abierto no debe retener la consola de Forja.
+        # Se cierran nuestros lectores; no se terminan procesos del usuario ni instaladores.
+        foreach($reader in $readers){
+            if(-not $reader.Closed){$reader.Reader.Dispose();if($reader.Pending.IsCompleted){try{$null=$reader.Pending.GetAwaiter().GetResult()}catch{}}}
+        }
+        $text=($captured -join "`n") -replace '\x1b\[[0-?]*[ -/]*[@-~]',''
+        $lines=@($text -split '[\r\n]+' | ForEach-Object {($_ -replace '[\x00-\x08\x0b\x0c\x0e-\x1f]','').TrimEnd()} | Where-Object {$_ -and $_.Trim() -notmatch '^[|/\\ -]+$'})
+        $code=$process.ExitCode
+        Write-ForjaProgress -Label $Label -Frame ($frame+1) -Completed:($code -eq 0) -Failed:($code -ne 0)
+        return [pscustomobject]@{ExitCode=$code;Output=$lines}
+    } catch {Write-ForjaProgress -Label $Label -Frame ($frame+1) -Failed;Write-Warn $_.Exception.Message;return [pscustomobject]@{ExitCode=-1;Output=@()}}
+    finally {if($process){$process.Dispose()}}
+}
+function Invoke-ForjaWingetOperation {param([string[]]$ArgumentList,[string]$Label)
+    $command=Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if(-not $command){$global:LASTEXITCODE=-1;return}
+    $result=Invoke-ForjaPackageProcess $command.Source $ArgumentList $Label
+    $global:LASTEXITCODE=$result.ExitCode
+    foreach($line in $result.Output){Write-Output $line}
+}
+
+function Invoke-ForjaGitTransfer {param([string[]]$ArgumentList)
+    $command=Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if(-not $command){$global:LASTEXITCODE=-1;return}
+    $result=Invoke-ForjaPackageProcess $command.Source $ArgumentList 'Descargando skills'
+    $global:LASTEXITCODE=$result.ExitCode
+    foreach($line in $result.Output){Write-Output $line}
+}
 function Get-ForjaToolPath { param(
     [ValidateSet('npm','pnpm','claude','netlify','vercel','supabase','snyk','codex','gemini','neon','resend')][string]$Name
 )
@@ -99,6 +246,12 @@ function Invoke-ForjaTool { param([string]$Name)
     }
     # Un aviso de stderr no es una excepcion PowerShell ni demuestra fallo de instalacion.
     $ErrorActionPreference = 'Continue'
+    if($Name -eq 'npm' -and $toolArguments.Count -gt 0 -and $toolArguments[0] -eq 'install'){
+        $result=Invoke-ForjaPackageProcess $path $toolArguments 'Paquetes npm'
+        $global:LASTEXITCODE=$result.ExitCode
+        foreach($line in $result.Output){Write-Output $line}
+        return
+    }
     try {
         & $path @toolArguments 2>&1 | ForEach-Object { $_.ToString() }
         $code = $LASTEXITCODE
@@ -157,7 +310,7 @@ function Install-Winget { param($id, $nombre)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Info "[INSTALANDO] $nombre via winget..."
         Write-Host ""
-        winget install --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { Write-Host "  $_" }
+        Invoke-ForjaWingetOperation @('install','--id',$id,'--exact','--source','winget','--accept-package-agreements','--accept-source-agreements') $nombre 2>&1 | ForEach-Object { Write-Host "  $_" }
         return ($LASTEXITCODE -eq 0)
     }
     return $false
@@ -244,7 +397,7 @@ function Get-ReviewedSkills { param(
     # Sin checkout de una rama cambiante, hooks o submodulos del repositorio remoto.
     & git -c core.hooksPath=NUL init --quiet -- $repoPath 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo iniciar la descarga.' }
-    & git -C $repoPath -c core.hooksPath=NUL -c protocol.file.allow=never fetch --quiet --depth=1 --no-tags -- $Repository $Revision 2>&1 | Out-Null
+    Invoke-ForjaGitTransfer @('-C',$repoPath,'-c','core.hooksPath=NUL','-c','protocol.file.allow=never','fetch','--progress','--depth=1','--no-tags','--',$Repository,$Revision) 2>&1 | ForEach-Object {Write-Host "  $_"}
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo descargar la revision fijada.' }
     & git -C $repoPath -c core.hooksPath=NUL -c core.symlinks=true checkout --quiet --detach $Revision 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo extraer la revision fijada.' }
@@ -372,7 +525,7 @@ function Test-ForjaAdminGroupList { param([string]$Csv)
 }
 function Save-ForjaRepairPackage { param([string]$Uri,[string]$Destination)
     if ($Uri -ne 'https://downloads.mongodb.com/compass/mongosh-2.14.0-x64.msi') { throw 'Origen de reparacion no permitido.' }
-    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 120 -ErrorAction Stop | Out-Null
+    Save-ForjaDownload $Uri $Destination 'MongoDB Shell' -NoRedirect
 }
 function Test-MongoshRuntime { param([string]$Version)
     $command=Get-Command mongosh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -460,6 +613,12 @@ function Get-InstallerFailureDetail { param([string]$Output)
 function Invoke-ForjaPython { param([string]$Executable)
     $pythonArguments=$args
     $ErrorActionPreference='Continue'
+    if($pythonArguments.Count -ge 3 -and $pythonArguments[0] -eq '-m' -and $pythonArguments[1] -eq 'pip' -and $pythonArguments[2] -eq 'install'){
+        $result=Invoke-ForjaPackageProcess $Executable $pythonArguments 'Librerias Python'
+        $global:LASTEXITCODE=$result.ExitCode
+        foreach($line in $result.Output){Write-Output $line}
+        return
+    }
     try { & $Executable @pythonArguments 2>&1 | ForEach-Object { $_.ToString() }; $code=$LASTEXITCODE }
     catch { Write-Warn "No se pudo ejecutar Python ($($_.Exception.GetType().Name))."; $code=-1 }
     $global:LASTEXITCODE=$code
@@ -546,10 +705,10 @@ function Invoke-WingetUpdate { param($id, $nombre)
     }
     $installerOutput=New-Object 'System.Collections.Generic.List[string]'
     try {
-        winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { $installerOutput.Add($_.ToString()); Write-Host "  $_" }
+        Invoke-ForjaWingetOperation @('upgrade','--id',$id,'--exact','--source','winget','--accept-package-agreements','--accept-source-agreements') $nombre 2>&1 | ForEach-Object { $installerOutput.Add($_.ToString()); Write-Host "  $_" }
         $codigo = $LASTEXITCODE
     } catch { Write-Warn "${nombre}: no se pudo iniciar la actualizacion."; return 'error' }
-    if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre sin actualizacion aplicable (instalada: $($info.Version))."; return 'aldia' }
+    if ($codigo -eq -1978335189) { Write-OK "$nombre sin actualizacion aplicable (instalada: $($info.Version))."; return 'aldia' }
     if ($codigo -eq 0) {
         $script:ForjaWingetInventory = $null
         $after = Get-WingetPackageInfo $id
@@ -558,6 +717,13 @@ function Invoke-WingetUpdate { param($id, $nombre)
         }
         Write-Warn "$nombre : el instalador termino, pero no se pudo confirmar la version esperada. Volve a verificar."
         return 'error'
+    }
+    if($codigo -eq -1978334956){
+        if($id -eq 'Google.AndroidStudio'){Write-Warn 'Android Studio requiere su actualizador: abri Help > Check for Updates.'}
+        elseif($id -eq 'CondaForge.Miniforge3'){Write-Warn 'Miniforge requiere su gestor original. Revisa Conda en su terminal; no se migran tus entornos.'}
+        else {Write-Warn 'Este programa requiere el actualizador de su proveedor.'}
+        Write-Info 'Se deja pendiente; no se repite el instalador ni se cambia el gestor.'
+        return 'pendiente'
     }
     $detail=Get-InstallerFailureDetail ($installerOutput -join "`n")
     Write-Warn "${nombre}: fallo WinGet $codigo. $detail"
@@ -628,7 +794,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "Anysphere.Cursor",
     "Command": "cursor",
-    "Docs": "https://cursor.com/downloads"
+    "Docs": "https://cursor.com/downloads",
+    "Description": "Editor de codigo con IA para escribir, entender y corregir proyectos."
   },
   {
     "Id": "antigravity",
@@ -637,7 +804,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "Google.Antigravity",
     "Command": "antigravity",
-    "Docs": "https://antigravity.google/download"
+    "Docs": "https://antigravity.google/download",
+    "Description": "Aplicacion para organizar y supervisar tareas de agentes de IA."
   },
   {
     "Id": "antigravity-ide",
@@ -646,7 +814,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "Google.AntigravityIDE",
     "Command": "antigravity-ide",
-    "Docs": "https://antigravity.google/download"
+    "Docs": "https://antigravity.google/download",
+    "Description": "Editor de codigo de Google con agentes de IA integrados."
   },
   {
     "Id": "gemini-app",
@@ -655,7 +824,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "Google.GeminiDesktop",
     "Command": "",
-    "Docs": "https://gemini.google/"
+    "Docs": "https://gemini.google/",
+    "Description": "Aplicacion de Gemini para conversar con la IA y trabajar con archivos."
   },
   {
     "Id": "grok-bot",
@@ -664,7 +834,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "xAI.GrokBot",
     "Command": "",
-    "Docs": "https://docs.x.ai/grok-bot/get-started"
+    "Docs": "https://docs.x.ai/grok-bot/get-started",
+    "Description": "Asistente que realiza tareas usando aplicaciones y servicios conectados."
   },
   {
     "Id": "codex-app",
@@ -674,7 +845,8 @@ function Get-ForjaStackCatalog {
     "Package": "9PLM9XGG6VKS",
     "Appx": "OpenAI.Codex",
     "Command": "",
-    "Docs": "https://learn.chatgpt.com/docs/app/windows"
+    "Docs": "https://learn.chatgpt.com/docs/app/windows",
+    "Description": "Interfaz visual de ChatGPT/Codex para trabajar con agentes y proyectos."
   },
   {
     "Id": "codex-cli",
@@ -683,7 +855,8 @@ function Get-ForjaStackCatalog {
     "Method": "npm",
     "Package": "@openai/codex",
     "Command": "codex",
-    "Docs": "https://learn.chatgpt.com/docs/codex/cli"
+    "Docs": "https://learn.chatgpt.com/docs/codex/cli",
+    "Description": "Agente de OpenAI para escribir y revisar codigo desde una terminal."
   },
   {
     "Id": "agy-cli",
@@ -692,7 +865,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "Google.AntigravityCLI",
     "Command": "agy",
-    "Docs": "https://antigravity.google/docs/getting-started"
+    "Docs": "https://antigravity.google/docs/getting-started",
+    "Description": "Agente de Google para programar y ejecutar tareas desde la terminal."
   },
   {
     "Id": "cursor-cli",
@@ -706,7 +880,8 @@ function Get-ForjaStackCatalog {
     "Executable": "dist-package/node.exe",
     "Script": "dist-package/index.js",
     "Launcher": "forja-agent.cmd",
-    "Docs": "https://prod.cursor.com/docs/cli/installation"
+    "Docs": "https://prod.cursor.com/docs/cli/installation",
+    "Description": "Agente de Cursor para trabajar en un proyecto desde la terminal."
   },
   {
     "Id": "gemini-cli",
@@ -716,7 +891,8 @@ function Get-ForjaStackCatalog {
     "Package": "@google/gemini-cli",
     "Command": "gemini",
     "Notice": "Google retiro el acceso de cuentas personales a Gemini CLI. Preferi agy; revisa tu tipo de cuenta antes de instalar Gemini CLI.",
-    "Docs": "https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals"
+    "Docs": "https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals",
+    "Description": "Cliente de Gemini en terminal para cuentas compatibles; revisar su disponibilidad."
   },
   {
     "Id": "neon-cli",
@@ -725,7 +901,8 @@ function Get-ForjaStackCatalog {
     "Method": "npm",
     "Package": "neon",
     "Command": "neon",
-    "Docs": "https://neon.com/docs/cli/install"
+    "Docs": "https://neon.com/docs/cli/install",
+    "Description": "Administra tus bases PostgreSQL alojadas en Neon."
   },
   {
     "Id": "resend-cli",
@@ -734,7 +911,8 @@ function Get-ForjaStackCatalog {
     "Method": "npm",
     "Package": "resend-cli",
     "Command": "resend",
-    "Docs": "https://resend.com/docs/cli"
+    "Docs": "https://resend.com/docs/cli",
+    "Description": "Administra el servicio de correo de Resend desde la terminal."
   },
   {
     "Id": "render-cli",
@@ -748,7 +926,8 @@ function Get-ForjaStackCatalog {
     "Executable": "render.exe",
     "Script": "",
     "Launcher": "forja-render.cmd",
-    "Docs": "https://render.com/docs/cli"
+    "Docs": "https://render.com/docs/cli",
+    "Description": "Administra aplicaciones y servicios alojados en Render."
   },
   {
     "Id": "cloudflared",
@@ -757,7 +936,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "Cloudflare.cloudflared",
     "Command": "cloudflared",
-    "Docs": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+    "Docs": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
+    "Description": "Conecta un servicio de tu PC con Cloudflare mediante un tunel."
   },
   {
     "Id": "wrangler",
@@ -766,7 +946,8 @@ function Get-ForjaStackCatalog {
     "Method": "project-npm",
     "Package": "wrangler",
     "Command": "wrangler",
-    "Docs": "https://developers.cloudflare.com/workers/wrangler/install-and-update/"
+    "Docs": "https://developers.cloudflare.com/workers/wrangler/install-and-update/",
+    "Description": "Desarrolla y publica Workers o Pages de Cloudflare desde un proyecto."
   },
   {
     "Id": "postgresql",
@@ -775,7 +956,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "PostgreSQL.PostgreSQL.17",
     "Command": "psql",
-    "Docs": "https://www.postgresql.org/download/windows/"
+    "Docs": "https://www.postgresql.org/download/windows/",
+    "Description": "Servidor de base de datos para guardar y consultar informacion estructurada."
   },
   {
     "Id": "rust",
@@ -785,7 +967,8 @@ function Get-ForjaStackCatalog {
     "Package": "Rustlang.Rustup",
     "Command": "rustup",
     "Notice": "WinGet gestiona rustup. Los toolchains se actualizan por separado con rustup update, segun cada proyecto.",
-    "Docs": "https://www.rust-lang.org/tools/install"
+    "Docs": "https://www.rust-lang.org/tools/install",
+    "Description": "Instala y administra las herramientas para compilar programas Rust."
   },
   {
     "Id": "buildtools",
@@ -795,7 +978,8 @@ function Get-ForjaStackCatalog {
     "Package": "Microsoft.VisualStudio.2022.BuildTools",
     "Command": "",
     "Notice": "El instalador permite elegir workloads. Revisa C++ y Windows SDK para Tauri o extensiones nativas; no se marcan como instalados solo por tener Build Tools.",
-    "Docs": "https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022"
+    "Docs": "https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022",
+    "Description": "Compiladores de Windows que necesitan algunas apps y librerias nativas."
   },
   {
     "Id": "dotnet",
@@ -804,7 +988,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "Microsoft.DotNet.SDK.10",
     "Command": "dotnet",
-    "Docs": "https://dotnet.microsoft.com/download"
+    "Docs": "https://dotnet.microsoft.com/download",
+    "Description": "Herramientas para crear y compilar aplicaciones de la plataforma .NET."
   },
   {
     "Id": "inno",
@@ -813,7 +998,8 @@ function Get-ForjaStackCatalog {
     "Method": "winget",
     "Package": "JRSoftware.InnoSetup",
     "Command": "ISCC",
-    "Docs": "https://jrsoftware.org/isinfo.php"
+    "Docs": "https://jrsoftware.org/isinfo.php",
+    "Description": "Crea instaladores de Windows para distribuir tus propias aplicaciones."
   },
   {
     "Id": "android",
@@ -823,7 +1009,8 @@ function Get-ForjaStackCatalog {
     "Package": "Google.AndroidStudio",
     "Command": "",
     "Notice": "SDK, emuladores y plataformas Android se eligen despues desde SDK Manager.",
-    "Docs": "https://developer.android.com/studio"
+    "Docs": "https://developer.android.com/studio",
+    "Description": "Entorno para crear, probar y compilar aplicaciones Android."
   },
   {
     "Id": "jdk17",
@@ -833,7 +1020,8 @@ function Get-ForjaStackCatalog {
     "Package": "EclipseAdoptium.Temurin.17.JDK",
     "Command": "java",
     "Docs": "https://adoptium.net/installation/",
-    "Scoop": "temurin17-jdk"
+    "Scoop": "temurin17-jdk",
+    "Description": "Herramientas Java 17 que usan determinados proyectos y versiones de Gradle."
   },
   {
     "Id": "jdk21",
@@ -844,7 +1032,8 @@ function Get-ForjaStackCatalog {
     "Command": "java",
     "Notice": "JDK 17 y 21 pueden convivir. JAVA_HOME y el JDK de Gradle se eligen por proyecto.",
     "Docs": "https://adoptium.net/installation/",
-    "Scoop": "temurin21-jdk"
+    "Scoop": "temurin21-jdk",
+    "Description": "Herramientas Java 21 para los proyectos que necesitan esa version."
   },
   {
     "Id": "miniforge",
@@ -854,7 +1043,8 @@ function Get-ForjaStackCatalog {
     "Package": "CondaForge.Miniforge3",
     "Command": "conda",
     "Notice": "Forja gestiona el instalador de Miniforge, no modifica ni migra sus entornos Conda.",
-    "Docs": "https://github.com/conda-forge/miniforge"
+    "Docs": "https://github.com/conda-forge/miniforge",
+    "Description": "Organiza entornos Python y paquetes cientificos con Conda."
   },
   {
     "Id": "python-web-vision",
@@ -862,7 +1052,8 @@ function Get-ForjaStackCatalog {
     "Name": "Flask + OpenCV + NumPy (venv aislado)",
     "Method": "python-venv",
     "Command": "",
-    "Docs": "https://docs.python.org/3/library/venv.html"
+    "Docs": "https://docs.python.org/3/library/venv.html",
+    "Description": "Entorno separado para crear APIs Flask y procesar imagenes con OpenCV."
   },
   {
     "Id": "supabase-native",
@@ -877,7 +1068,8 @@ function Get-ForjaStackCatalog {
     "Executable": "supabase.exe",
     "Script": "",
     "Launcher": "forja-supabase.cmd",
-    "Docs": "https://supabase.com/docs/guides/local-development/cli/getting-started"
+    "Docs": "https://supabase.com/docs/guides/local-development/cli/getting-started",
+    "Description": "Cliente para trabajar con bases, autenticacion y funciones de Supabase."
   }
 ]
 '@
@@ -916,7 +1108,7 @@ function Get-ForjaManagedRoot { param($Tool)
 function Save-ForjaToolArchive { param($Tool,[string]$Destination)
     $approved=@(Get-ForjaStackCatalog | Where-Object { $_.Method -eq 'archive' -and $_.Id -eq $Tool.Id -and $_.Uri -ceq $Tool.Uri -and $_.Sha256 -ceq $Tool.Sha256 })
     if ($approved.Count -ne 1) { throw 'Paquete fuera del catalogo revisado.' }
-    Invoke-WebRequest -Uri $Tool.Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop | Out-Null
+    Save-ForjaDownload $Tool.Uri $Destination $Tool.Name
 }
 function Expand-ForjaToolArchive { param([IO.Stream]$Stream,[string]$Destination)
     Add-Type -AssemblyName System.IO.Compression
@@ -1114,7 +1306,7 @@ function Invoke-ForjaStackTool { param($Tool,[switch]$Update)
             }
             if($before.State -eq 'installed'){Write-OK "$($Tool.Name) presente: $($before.Version).";return 'aldia'}
             # ID Store tomado de la documentacion oficial, separado del ID CLI OpenAI.Codex.
-            winget install --id $Tool.Package --exact --source msstore --disable-interactivity 2>&1 | ForEach-Object {Write-Host "  $_"}
+            Invoke-ForjaWingetOperation @('install','--id',$Tool.Package,'--exact','--source','msstore','--disable-interactivity') $Tool.Name 2>&1 | ForEach-Object {Write-Host "  $_"}
             $code=$LASTEXITCODE;$after=Get-ForjaStoreApp $Tool
             if($code -eq 0 -and $after.State -eq 'installed'){return 'ok'}
             Write-Warn "Revisa la instalacion en Microsoft Store: $($Tool.Docs)";return 'pendiente'
@@ -1224,74 +1416,430 @@ function Format-ForjaMenuLine { param([string]$Text,[int]$Width=80,[string]$Pref
     }
     if($line.Trim()){Write-Output $line.TrimEnd()}
 }
-function Get-ForjaMenuSections {
-    $sections=[ordered]@{
-        'BASE'=@('WinGet','PowerShell 7','WSL','Git','Node/npm','pnpm','Python')
-        'APPS / IDE'=@('VS Code','Claude App')
-        'CLI AGENTES'=@('Claude Code')
-        'CLOUD'=@('Netlify','Vercel','Supabase')
-        'DATOS'=@('Docker','mongosh','PostGIS*')
-        'PYTHON'=@('Libs base')
-        'COMPILAR'=@()
-        'ANDROID'=@()
-        'UTILIDADES'=@('GitHub CLI','Snyk','Ollama','FFmpeg')
-        'INTEGRACION'=@('Skills opcionales','Conexiones')
-    }
-    $groups=@{'Editores y agentes'='APPS / IDE';'CLI de agentes'='CLI AGENTES';'Gemini CLI (compatibilidad)'='CLI AGENTES';'Servicios cloud'='CLOUD';'Bases de datos locales'='DATOS';'Python cientifico'='PYTHON';'Compilacion y escritorio'='COMPILAR';'Android y Java'='ANDROID'}
-    $short=@{'cursor'='Cursor';'antigravity'='Antigravity App';'antigravity-ide'='Antigravity IDE';'gemini-app'='Gemini';'grok-bot'='Grok Bot';'codex-app'='ChatGPT/Codex';'codex-cli'='Codex';'agy-cli'='agy';'cursor-cli'='Cursor Agent';'gemini-cli'='Gemini CLI*';'neon-cli'='Neon';'resend-cli'='Resend';'render-cli'='Render';'cloudflared'='cloudflared';'wrangler'='Wrangler';'postgresql'='PostgreSQL 17';'rust'='Rust/Cargo';'buildtools'='Build Tools';'dotnet'='.NET SDK 10';'inno'='Inno Setup';'android'='Android Studio';'jdk17'='JDK 17';'jdk21'='JDK 21';'miniforge'='Miniforge';'python-web-vision'='Flask/OpenCV/NumPy'}
-    foreach($tool in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core})){
-        $group=$groups[$tool.Group];if(-not $group){$group=$tool.Group}
-        if(-not $sections.Contains($group)){$sections[$group]=@()}
-        $label=$short[$tool.Id];if(-not $label){$label=$tool.Name}
-        $sections[$group]+=$label
-    }
-    foreach($name in $sections.Keys){[pscustomobject]@{Name=$name;Items=$sections[$name]}}
+function Get-ForjaBaseCatalog {
+    $json=@'
+[
+  {
+    "Id": "winget",
+    "Group": "Infraestructura",
+    "Name": "WinGet",
+    "Method": "bootstrap-winget",
+    "Description": "Busca, instala y actualiza programas de Windows.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "powershell",
+    "Group": "Infraestructura",
+    "Name": "PowerShell 7",
+    "Method": "winget",
+    "Description": "Terminal moderna para ejecutar comandos y automatizar tareas.",
+    "Package": "Microsoft.PowerShell",
+    "Command": "pwsh"
+  },
+  {
+    "Id": "wsl",
+    "Group": "Infraestructura",
+    "Name": "WSL",
+    "Method": "wsl-runtime",
+    "Description": "Permite usar Linux dentro de Windows; tambien lo usa Docker.",
+    "Package": "",
+    "Command": "wsl"
+  },
+  {
+    "Id": "git",
+    "Group": "Infraestructura",
+    "Name": "Git",
+    "Method": "winget",
+    "Description": "Guarda el historial del codigo y permite colaborar con otras personas.",
+    "Package": "Git.Git",
+    "Command": "git"
+  },
+  {
+    "Id": "node",
+    "Group": "Lenguajes",
+    "Name": "Node.js LTS + npm",
+    "Method": "winget",
+    "Description": "Ejecuta JavaScript y administra las dependencias de tus proyectos web.",
+    "Package": "OpenJS.NodeJS.LTS",
+    "Command": "node"
+  },
+  {
+    "Id": "pnpm",
+    "Group": "Lenguajes",
+    "Name": "pnpm",
+    "Method": "winget",
+    "Description": "Instala paquetes JavaScript ahorrando espacio y compartiendo descargas.",
+    "Package": "pnpm.pnpm",
+    "Command": "pnpm"
+  },
+  {
+    "Id": "python",
+    "Group": "Lenguajes",
+    "Name": "Python",
+    "Method": "python-runtime",
+    "Description": "Lenguaje para APIs, automatizacion, datos e inteligencia artificial.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "python-base",
+    "Group": "Python cientifico",
+    "Name": "Librerias Python base",
+    "Method": "python-libraries",
+    "Description": "Entorno aislado con herramientas para APIs, PDF y conexiones web.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "vscode",
+    "Group": "Editores y agentes",
+    "Name": "VS Code",
+    "Method": "winget",
+    "Description": "Editor para abrir proyectos, programar y usar extensiones.",
+    "Package": "Microsoft.VisualStudioCode",
+    "Command": "code"
+  },
+  {
+    "Id": "claude-code",
+    "Group": "CLI de agentes",
+    "Name": "Claude Code CLI",
+    "Method": "claude-runtime",
+    "Description": "Agente de Anthropic para programar y revisar proyectos desde una terminal.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "claude-app",
+    "Group": "Editores y agentes",
+    "Name": "Claude App",
+    "Method": "winget",
+    "Description": "Aplicacion de Claude para conversar, trabajar con archivos y usar sus agentes.",
+    "Package": "Anthropic.Claude",
+    "Command": ""
+  },
+  {
+    "Id": "github",
+    "Group": "Utilidades",
+    "Name": "GitHub CLI",
+    "Method": "winget",
+    "Description": "Trabaja con repositorios y propuestas de cambios de GitHub desde la terminal.",
+    "Package": "GitHub.cli",
+    "Command": "gh"
+  },
+  {
+    "Id": "docker",
+    "Group": "Bases de datos locales",
+    "Name": "Docker Desktop",
+    "Method": "winget",
+    "Description": "Ejecuta aplicaciones y bases de datos en contenedores separados.",
+    "Package": "Docker.DockerDesktop",
+    "Command": "docker"
+  },
+  {
+    "Id": "mongosh",
+    "Group": "Bases de datos locales",
+    "Name": "MongoDB Shell (mongosh)",
+    "Method": "winget",
+    "Description": "Cliente para consultar una base MongoDB; no instala el servidor.",
+    "Package": "MongoDB.Shell",
+    "Command": "mongosh"
+  },
+  {
+    "Id": "ollama",
+    "Group": "Utilidades",
+    "Name": "Ollama",
+    "Method": "winget",
+    "Description": "Descarga y ejecuta modelos de IA localmente en tu computadora.",
+    "Package": "Ollama.Ollama",
+    "Command": "ollama"
+  },
+  {
+    "Id": "ffmpeg",
+    "Group": "Utilidades",
+    "Name": "FFmpeg",
+    "Method": "winget",
+    "Description": "Convierte, recorta y procesa audio y video desde comandos.",
+    "Package": "Gyan.FFmpeg",
+    "Command": "ffmpeg"
+  },
+  {
+    "Id": "netlify",
+    "Group": "Servicios cloud",
+    "Name": "Netlify CLI",
+    "Method": "npm",
+    "Description": "Prueba y administra sitios web publicados en Netlify.",
+    "Package": "netlify-cli",
+    "Command": "netlify"
+  },
+  {
+    "Id": "vercel",
+    "Group": "Servicios cloud",
+    "Name": "Vercel CLI",
+    "Method": "npm",
+    "Description": "Prueba y administra aplicaciones web publicadas en Vercel.",
+    "Package": "vercel",
+    "Command": "vercel"
+  },
+  {
+    "Id": "supabase",
+    "Group": "Servicios cloud",
+    "Name": "Supabase CLI",
+    "Method": "supabase",
+    "Description": "Trabaja con la base, los usuarios, archivos y funciones de Supabase.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "snyk",
+    "Group": "Utilidades",
+    "Name": "Snyk CLI",
+    "Method": "npm",
+    "Description": "Analiza dependencias y busca vulnerabilidades conocidas.",
+    "Package": "snyk",
+    "Command": "snyk"
+  },
+  {
+    "Id": "skills",
+    "Group": "Integracion",
+    "Name": "Skills opcionales de Claude",
+    "Method": "skills",
+    "Description": "Agrega recetas para que Claude pueda realizar tareas especializadas.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "connections",
+    "Group": "Integracion",
+    "Name": "Guia de conexiones",
+    "Method": "guidance",
+    "Description": "Explica como iniciar sesion en los servicios sin copiar claves en Forja.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "frontend-guide",
+    "Group": "Por proyecto",
+    "Name": "React / TypeScript / Vite / Tailwind",
+    "Method": "guidance",
+    "Description": "Guia para preparar una interfaz web, PWA o extension de Chrome.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "postgis-guide",
+    "Group": "Por proyecto",
+    "Name": "PostGIS",
+    "Method": "guidance",
+    "Description": "Guia para agregar funciones de mapas y ubicaciones a PostgreSQL.",
+    "Package": "",
+    "Command": ""
+  }
+]
+'@
+    $entries=ConvertFrom-Json -InputObject $json
+    foreach($entry in $entries){Write-Output $entry}
 }
-function Show-ForjaMainMenu { param([int]$Width=0)
-    if($Width -le 0){$Width=(Get-ForjaConsoleSize).Width}
-    $Width=[Math]::Max(40,[Math]::Min(80,$Width))
-    $rule='='*($Width-2)
-    Write-Section $rule
-    foreach($line in @(Format-ForjaMenuLine ("FORJA DEL DESARROLLADOR "+$VERSION) $Width)){Write-Section $line}
-    foreach($line in @(Format-ForjaMenuLine 'Stack IA | Rodo Agustin Garcia | ragustingarcia.com' $Width)){Write-Dim $line}
-    Write-Section $rule
-    foreach($section in @(Get-ForjaMenuSections)){
-        $prefix=$section.Name.PadRight(13)
-        foreach($line in @(Format-ForjaMenuLine ($section.Items -join ', ') $Width $prefix (' '*13))){Write-Host $line}
+function Get-ForjaToolCatalog {
+    $all=@(Get-ForjaBaseCatalog)+@(Get-ForjaStackCatalog | Where-Object {-not $_.Core})
+    $order=@('Infraestructura','Lenguajes','Editores y agentes','CLI de agentes','Gemini CLI (compatibilidad)','Servicios cloud','Bases de datos locales','Python cientifico','Compilacion y escritorio','Android y Java','Utilidades','Integracion','Por proyecto')
+    $number=0
+    foreach($group in $order){
+        foreach($tool in @($all | Where-Object Group -eq $group)){
+            $number++
+            $entry=$tool | Select-Object *
+            $entry | Add-Member -NotePropertyName Code -NotePropertyValue ('T{0:00}' -f $number)
+            Write-Output $entry
+        }
     }
-    foreach($line in @(Format-ForjaMenuLine '* Condiciones y pasos por proyecto: opciones 4 y 5.' $Width)){Write-Dim $line}
+}
+function Get-ForjaToolCard {param($Tool,[int]$Width=80)
+    $title='['+$Tool.Code+'] '+$Tool.Name
+    Format-ForjaMenuLine $title $Width '  ' '        '
+    Format-ForjaMenuLine $Tool.Description $Width '        ' '        '
+}
+function Show-ForjaMainMenu {param([int]$Width=0)
+    if($Width -le 0){$Width=(Get-ForjaConsoleSize).Width}
+    $Width=[Math]::Max(40,[Math]::Min(80,$Width));$rule='='*($Width-2)
     Write-Section $rule
-    foreach($item in @(
-        '[1] Preparar stack   - base y herramientas a elegir',
-        '[2] Solo actualizar  - herramientas ya instaladas',
-        '[3] Diagnostico      - rutas y presencia',
-        '[4] Guias de proyecto y conexiones',
-        '[5] Catalogo completo, herramienta por herramienta',
-        '[0] Salir (tambien ENTER)'
-    )){foreach($line in @(Format-ForjaMenuLine $item $Width)){Write-Host $line}}
+    Write-Section ("  FORJA DEL DESARROLLADOR "+$VERSION)
+    foreach($line in @(Format-ForjaMenuLine 'Stack para crear con agentes de IA' $Width '  ' '  ')){Write-Host $line}
+    foreach($line in @(Format-ForjaMenuLine 'Rodo Agustin Garcia | ragustingarcia.com' $Width '  ' '  ')){Write-Host $line -ForegroundColor DarkGray}
+    Write-Section $rule
+    Write-Host ''
+    foreach($line in @(Format-ForjaMenuLine 'Escribi T01, T02... para instalar o actualizar SOLO esa herramienta.' $Width '  ' '  ')){Write-Host $line -ForegroundColor Cyan}
+    foreach($line in @(Format-ForjaMenuLine 'Al final estan los modos para preparar todo, actualizar o diagnosticar.' $Width '  ' '  ')){Write-Host $line -ForegroundColor DarkGray}
+    $lastGroup=''
+    foreach($tool in @(Get-ForjaToolCatalog)){
+        if($tool.Group -ne $lastGroup){Write-Host '';Write-Section ('  --- '+$tool.Group.ToUpperInvariant()+' ---');Write-Host ''; $lastGroup=$tool.Group}
+        foreach($line in @(Get-ForjaToolCard $tool $Width)){Write-Host $line}
+        Write-Host ''
+    }
+    Write-Section $rule
+    Write-Section '  MODOS DE EJECUCION'
+    Write-Host ''
+    foreach($line in @('[1] Preparar stack completo - base + opciones a elegir','[2] Actualizar lo instalado','[3] Diagnostico - consultar rutas y presencia','[4] Guias de proyectos y conexiones','[5] Ver este catalogo por paginas','[0] Salir (tambien ENTER)')){
+        foreach($row in @(Format-ForjaMenuLine $line $Width '  ' '      ')){Write-Host $row}
+        Write-Host ''
+    }
+    foreach($line in @(Format-ForjaMenuLine 'Tambien podes escribir el codigo T de cualquier herramienta.' $Width '  ' '  ')){Write-Host $line -ForegroundColor DarkGray}
 }
 function Show-ForjaFullCatalog {
-    $size=Get-ForjaConsoleSize
-    $rows=@()
-    $base=@('WinGet','PowerShell 7','WSL','Git','Node.js LTS / npm','pnpm','Python (ramas y actualizaciones)','Librerias Python en venv propio','VS Code','Claude Code CLI','Claude App','GitHub CLI','Docker Desktop','MongoDB Shell (mongosh)','Ollama','FFmpeg','Netlify CLI','Vercel CLI','Supabase CLI','Snyk CLI','Skills opcionales de Claude','Asistente de conexion de servicios')
-    $rows+='BASE'
-    foreach($name in $base){$rows+=@(Format-ForjaMenuLine $name $size.Width '  - ' '    ')}
-    foreach($group in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core} | Group-Object Group)){
-        $rows+=@(Format-ForjaMenuLine $group.Name.ToUpperInvariant() $size.Width)
-        foreach($tool in $group.Group){$rows+=@(Format-ForjaMenuLine $tool.Name $size.Width '  - ' '    ')}
+    $size=Get-ForjaConsoleSize;$pageSize=[Math]::Max(7,$size.Height-5)
+    $rows=@();$lastGroup=''
+    foreach($tool in @(Get-ForjaToolCatalog)){
+        $block=@()
+        if($lastGroup -ne $tool.Group){$block+=@('';$tool.Group.ToUpperInvariant();'');$lastGroup=$tool.Group}
+        $block+=@(Get-ForjaToolCard $tool $size.Width);$block+=''
+        $used=$rows.Count % $pageSize
+        if($used -gt 0 -and ($used+$block.Count) -gt $pageSize){$rows+=@('')*($pageSize-$used)}
+        $rows+=$block
     }
-    $rows+=@(Format-ForjaMenuLine 'POR PROYECTO: React, TypeScript, Vite, Tailwind, PWA, extensiones Chrome, PostGIS y autenticaciones (opcion 4).' $size.Width)
-    $rows+=@(Format-ForjaMenuLine 'Gemini CLI: revisar compatibilidad de la cuenta. Sin controladores ni aplicaciones de uso diario.' $size.Width)
-    $pageSize=[Math]::Max(5,$size.Height-5)
     $pages=[int][Math]::Ceiling($rows.Count/[double]$pageSize)
     for($offset=0;$offset -lt $rows.Count;$offset+=$pageSize){
-        Clear-Host
-        Write-Section ('CATALOGO COMPLETO | '+([int]($offset/$pageSize)+1)+' / '+$pages)
+        Clear-Host;Write-Section ('CATALOGO COMPLETO | '+([int]($offset/$pageSize)+1)+' / '+$pages)
         $end=[Math]::Min($offset+$pageSize,$rows.Count)
         for($index=$offset;$index -lt $end;$index++){Write-Host $rows[$index]}
         if($end -lt $rows.Count){$answer=Read-Host 'ENTER: siguiente | 0: volver';if($answer -eq '0'){return}}
         else {$null=Read-Host 'ENTER: volver al menu'}
     }
+}
+function Invoke-ForjaWslInstall {
+    try {
+        $wslExe=Join-Path $env:SystemRoot 'System32\wsl.exe'
+        $process=Start-Process -FilePath $wslExe -ArgumentList '--install','--no-distribution' -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        if($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010){Write-Warn 'WSL: reinicia y verifica wsl --status.';return 'pendiente'}
+        return 'error'
+    } catch {Write-Warn 'WSL no se instalo o se cancelo UAC.';return 'pendiente'}
+}
+function Invoke-ForjaSkillsTool {
+    $skillsDest = Join-Path $env:USERPROFILE '.claude\skills'
+    $skillsInstaladas = 0
+    $skillsErrores = 0
+    $skillsElegidas = 0
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Warn 'Git no disponible: reinicia la terminal para instalar skills.'
+        $status['skills'] = 'PENDIENTE'
+    } else {
+        Write-Warn 'Las skills son instrucciones de terceros: revisalas antes de habilitarlas.'
+        $packs = @(
+            @{ Name='Forja'; Url='https://github.com/ragustingarcia/la-forja-del-desarrollador.git'; Revision=$ForjaSkillsRevision; Folder='skills\rodo'; Names=@('bat-installer-builder') },
+            @{ Name='Anthropic'; Url='https://github.com/anthropics/skills.git'; Revision=$AnthropicSkillsRevision; Folder='skills'; Names=@('skill-creator','docx','pdf','xlsx','pptx') }
+        )
+        foreach ($pack in $packs) {
+            Write-Info "$($pack.Name): revision $($pack.Revision)"
+            if (-not (Ask-SN "Descargar e instalar el pack $($pack.Name)?")) { continue }
+            $skillsElegidas++
+            $workspace = $null
+            try {
+                $workspace = New-ForjaWorkspace
+                $repo = Get-ReviewedSkills -Repository $pack.Url -Revision $pack.Revision -Workspace $workspace
+                foreach ($name in $pack.Names) {
+                    $source = Join-Path (Join-Path $repo $pack.Folder) $name
+                    $adapter = $null
+                    if ($pack.Name -eq 'Forja' -and (Ask-SN 'Agregar tu nombre como adaptador, conservando el credito?')) {
+                        $adapter = Read-Host '  Tu nombre (una sola linea)'
+                    }
+                    if (Install-ReviewedSkill -Source $source -DestinationRoot $skillsDest -Name $name -Adapter $adapter) {
+                        Write-OK "$name instalada."
+                        $skillsInstaladas++
+                    }
+                }
+            } catch {
+                Write-Err "No se pudo completar el pack $($pack.Name). No se reemplazan skills existentes."
+                $skillsErrores++
+            } finally {
+                if ($workspace) {
+                    try { Remove-ForjaWorkspace $workspace }
+                    catch { Write-Warn "Temporal retenido para revision: $workspace"; $skillsErrores++ }
+                }
+            }
+        }
+        if ($skillsErrores -gt 0) { $status['skills'] = 'ERROR' }
+        elseif ($skillsElegidas -eq 0) { $status['skills'] = 'SALTADO' }
+        else { $status['skills'] = "OK - $skillsInstaladas nuevas" }
+    }
+    switch -Regex ($status['skills']){'^OK'{return 'ok'};'^ERROR'{return 'error'};'^PENDIENTE'{return 'pendiente'};default{return 'saltado'}}
+}
+function Invoke-ForjaIndividualTool {param($Tool)
+    # No ejecuta el recorrido completo ni instala otras selecciones.
+    $env:PATH="$env:PATH;$env:ProgramFiles\nodejs;$env:APPDATA\npm;$env:USERPROFILE\.local\bin"
+    try {
+        switch($Tool.Method){
+            'bootstrap-winget' {
+                $command=Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                if($command){$output=Invoke-ForjaCommand $command.Source @('--version') | Out-String;if($LASTEXITCODE -eq 0){Write-OK $output.Trim();return 'aldia'};return 'error'}
+                Write-Info 'Instala o actualiza Instalador de aplicaciones desde Microsoft Store.'
+                Start-Process 'ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1'
+                return 'pendiente'
+            }
+            'python-runtime' {
+                $installed=@()
+                foreach($branch in @('3.15','3.14','3.13','3.12','3.11','3.10')){
+                    $info=Get-WingetPackageInfo ('Python.Python.'+$branch)
+                    if($info.State -eq 'installed'){$installed+=$branch}
+                    elseif($info.State -ne 'absent'){return 'error'}
+                }
+                if($installed.Count){return (Invoke-ForjaPythonUpdates -OfferNewBranch)}
+                if(-not (Install-Winget 'Python.Python.3.14' 'Python 3.14')){return 'error'}
+                $script:ForjaWingetInventory=$null;$after=Get-WingetPackageInfo 'Python.Python.3.14'
+                if($after.State -eq 'installed'){return 'ok'};return 'pendiente'
+            }
+            'python-libraries' {$result=Invoke-ForjaPythonLibraries -Update;return $result.State}
+            'claude-runtime' {
+                $command=Get-ForjaToolPath claude
+                if(-not $command){$entry=[pscustomobject]@{Name='Claude Code CLI';Package='@anthropic-ai/claude-code';Command='claude'};return (Invoke-ForjaCatalogNpm $entry)}
+                $before=Invoke-ForjaTool claude --version | Out-String;$beforeVersion=[regex]::Match($before,'\d+\.\d+\.\d+').Value
+                if($LASTEXITCODE -ne 0 -or -not $beforeVersion){return 'error'}
+                Invoke-ForjaTool claude update | ForEach-Object {Write-Host "  $_"};if($LASTEXITCODE -ne 0){return 'error'}
+                $after=Invoke-ForjaTool claude --version | Out-String;$afterVersion=[regex]::Match($after,'\d+\.\d+\.\d+').Value
+                if($LASTEXITCODE -ne 0 -or -not $afterVersion){return 'error'}
+                if($afterVersion -eq $beforeVersion){return 'aldia'};return 'ok'
+            }
+            'wsl-runtime' {
+                $wslExe=Join-Path $env:SystemRoot 'System32\wsl.exe'
+                $null=Invoke-ForjaCommand $wslExe @('--status')
+                if($LASTEXITCODE -eq 0){
+                    $result=Invoke-ForjaPackageProcess $wslExe @('--update') 'Actualizando WSL'
+                    $result.Output | ForEach-Object {Write-Host "  $_"}
+                    if($result.ExitCode -eq 0){return 'aldia'};return 'error'
+                }
+                return (Invoke-ForjaWslInstall)
+            }
+            'skills' {return (Invoke-ForjaSkillsTool)}
+            'guidance' {
+                switch($Tool.Id){
+                    'postgis-guide' {
+                        Write-Section 'POSTGIS: DATOS DE MAPAS EN POSTGRESQL'
+                        Write-Info 'Primero instala PostgreSQL. Agrega PostGIS compatible desde su instalador o Stack Builder.'
+                        Write-Info 'Despues habilitalo en la base elegida con su administrador. Forja no ejecuta SQL ni modifica bases.'
+                        Write-Info 'Guia: https://postgis.net/documentation/getting_started/install_windows/'
+                    }
+                    'frontend-guide' {
+                        Write-Section 'FRONTEND: INTERFAZ WEB POR PROYECTO'
+                        Write-Info 'React arma la interfaz; TypeScript ayuda a detectar errores; Vite ejecuta y compila el proyecto.'
+                        Write-Info 'Tailwind da estilos. Las PWA agregan funciones de aplicacion; las extensiones amplian Chrome.'
+                        Write-Info 'Para un proyecto nuevo: npm create vite@latest mi-app -- --template react-ts'
+                        Write-Info 'Trabaja en esa carpeta y configura Tailwind segun su guia. Forja no crea ni modifica el proyecto.'
+                    }
+                    default {Show-ForjaProjectStack;Write-Info 'Otros accesos: gh auth login | netlify login | vercel login | supabase login | snyk auth'}
+                }
+                return 'guia'
+            }
+            'supabase' {
+                if(Get-ForjaToolPath supabase){return (Invoke-ForjaSupabaseUpdate)}
+                $entry=Get-ForjaStackCatalog | Where-Object Id -eq 'supabase-native'
+                return (Invoke-ForjaArchiveTool $entry)
+            }
+            'winget' {
+                $info=Get-WingetPackageInfo $Tool.Package
+                if($info.State -eq 'installed'){return (Invoke-WingetUpdate $Tool.Package $Tool.Name)}
+                if($info.State -eq 'absent' -and (Get-ForjaAlternatePackage $Tool)){return (Invoke-ForjaStackTool $Tool -Update)}
+                return (Invoke-ForjaStackTool $Tool)
+            }
+            default {return (Invoke-ForjaStackTool $Tool)}
+        }
+    } catch {Write-Warn "$($Tool.Name): $($_.Exception.Message)";return 'error'}
 }
 
 $T = 22
@@ -1301,12 +1849,28 @@ $necesitaReabrir = $false
 # ============================================================
 #  BIENVENIDA
 # ============================================================
+$individual=$null
 do {
     Clear-Host
     Show-ForjaMainMenu
-    $modoSel = Read-Host 'Modo (0-5; ENTER = salir)'
+    $modoSel = ([string](Read-Host 'Opcion (0-5 o T01, T02...; ENTER = salir)')).Trim()
     if($modoSel -eq '5'){Show-ForjaFullCatalog}
-} while($modoSel -eq '5')
+    elseif($modoSel -match '^(?i:T)([0-9]{1,2})$'){
+        $number=[int]$Matches[1]
+        $individual=Get-ForjaToolCatalog | Where-Object Code -eq ('T{0:00}' -f $number) | Select-Object -First 1
+        if(-not $individual){Write-Warn 'Ese codigo no existe. No se hicieron cambios.';$null=Read-Host 'ENTER para volver';$modoSel='menu'}
+    }
+} while($modoSel -in @('5','menu'))
+if($individual){
+    Write-Host '';Write-Section ('HERRAMIENTA INDIVIDUAL: '+$individual.Name)
+    Write-Info $individual.Description
+    $state='saltado'
+    if($individual.Method -eq 'guidance'){$state=Invoke-ForjaIndividualTool $individual}
+    elseif(Ask-SN ('Instalar o actualizar solamente '+$individual.Name+'?')){$state=Invoke-ForjaIndividualTool $individual}
+    Write-Section ('Resultado: '+$state)
+    $null=Read-Host 'ENTER para cerrar'
+    if($state -in @('error','pendiente')){exit 1};exit 0
+}
 if($modoSel -eq '4'){Show-ForjaProjectStack;Read-Host '  ENTER para cerrar';exit 0}
 if ($modoSel -eq '3') {
     foreach ($tool in @('winget','pwsh','wsl','git','node','npm','python','pip','claude','gh','docker','snyk')) {
@@ -1390,14 +1954,16 @@ if ($modoSel -eq "2") {
     cmd /c "wsl --status >nul 2>&1"
     if ($LASTEXITCODE -eq 0) {
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        cmd /c "wsl --update"
-        $codigo = $LASTEXITCODE
+        $wslUpdate=Invoke-ForjaPackageProcess (Join-Path $env:SystemRoot 'System32\wsl.exe') @('--update') 'Actualizando WSL'
+        $wslUpdate.Output | ForEach-Object {Write-Host "  $_"}
+        $codigo=$wslUpdate.ExitCode
         if ($codigo -ne 0) {
             # El CDN de Microsoft Store a veces devuelve 403 (Wsl/UpdatePackage/
             # 0x80190193); --web-download baja desde GitHub y lo esquiva
             Write-Warn "Fallo la descarga desde Microsoft Store. Reintentando desde GitHub..."
-            cmd /c "wsl --update --web-download"
-            $codigo = $LASTEXITCODE
+            $wslUpdate=Invoke-ForjaPackageProcess (Join-Path $env:SystemRoot 'System32\wsl.exe') @('--update','--web-download') 'Descargando WSL'
+            $wslUpdate.Output | ForEach-Object {Write-Host "  $_"}
+            $codigo=$wslUpdate.ExitCode
         }
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         if ($codigo -eq 0) {
@@ -1600,15 +2166,9 @@ if ($wslInstalled) {
     $status['wsl'] = 'OK'
     Write-OK 'WSL ya instalado. Las actualizaciones se hacen en el modo [2].'
 } elseif (Ask-SN 'Instalar WSL? Solo este paso pedira permisos de administrador') {
-    try {
-        $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
-        $process = Start-Process -FilePath $wslExe -ArgumentList '--install','--no-distribution' -Verb RunAs -Wait -PassThru -ErrorAction Stop
-        if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
-            Write-Warn 'WSL: instalacion aceptada; reinicia y verifica wsl --status.'
-            $status['wsl'] = 'PENDIENTE - REINICIAR Y VERIFICAR'
-            $necesitaReabrir = $true
-        } else { throw 'Fallo la instalacion.' }
-    } catch { Write-Err 'WSL no se instalo o se cancelo UAC.'; $status['wsl'] = 'ERROR' }
+    $state=Invoke-ForjaWslInstall
+    if($state -eq 'pendiente'){$status['wsl']='PENDIENTE - REINICIAR Y VERIFICAR';$necesitaReabrir=$true}
+    else {$status['wsl']='ERROR'}
 } else { $status['wsl'] = 'SALTADO' }
 
 # ============================================================
@@ -2123,52 +2683,7 @@ Write-Host "  carga SOLO cuando se usa: no gasta tokens el resto del tiempo."
 Write-Host "  Ej: /bat-installer-builder | skill-creator | docx, pdf, xlsx"
 Write-Host ""
 
-$skillsDest = Join-Path $env:USERPROFILE '.claude\skills'
-$skillsInstaladas = 0
-$skillsErrores = 0
-$skillsElegidas = 0
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Warn 'Git no disponible: reinicia la terminal para instalar skills.'
-    $status['skills'] = 'PENDIENTE'
-} else {
-    Write-Warn 'Las skills son instrucciones de terceros: revisalas antes de habilitarlas.'
-    $packs = @(
-        @{ Name='Forja'; Url='https://github.com/ragustingarcia/la-forja-del-desarrollador.git'; Revision=$ForjaSkillsRevision; Folder='skills\rodo'; Names=@('bat-installer-builder') },
-        @{ Name='Anthropic'; Url='https://github.com/anthropics/skills.git'; Revision=$AnthropicSkillsRevision; Folder='skills'; Names=@('skill-creator','docx','pdf','xlsx','pptx') }
-    )
-    foreach ($pack in $packs) {
-        Write-Info "$($pack.Name): revision $($pack.Revision)"
-        if (-not (Ask-SN "Descargar e instalar el pack $($pack.Name)?")) { continue }
-        $skillsElegidas++
-        $workspace = $null
-        try {
-            $workspace = New-ForjaWorkspace
-            $repo = Get-ReviewedSkills -Repository $pack.Url -Revision $pack.Revision -Workspace $workspace
-            foreach ($name in $pack.Names) {
-                $source = Join-Path (Join-Path $repo $pack.Folder) $name
-                $adapter = $null
-                if ($pack.Name -eq 'Forja' -and (Ask-SN 'Agregar tu nombre como adaptador, conservando el credito?')) {
-                    $adapter = Read-Host '  Tu nombre (una sola linea)'
-                }
-                if (Install-ReviewedSkill -Source $source -DestinationRoot $skillsDest -Name $name -Adapter $adapter) {
-                    Write-OK "$name instalada."
-                    $skillsInstaladas++
-                }
-            }
-        } catch {
-            Write-Err "No se pudo completar el pack $($pack.Name). No se reemplazan skills existentes."
-            $skillsErrores++
-        } finally {
-            if ($workspace) {
-                try { Remove-ForjaWorkspace $workspace }
-                catch { Write-Warn "Temporal retenido para revision: $workspace"; $skillsErrores++ }
-            }
-        }
-    }
-    if ($skillsErrores -gt 0) { $status['skills'] = 'ERROR' }
-    elseif ($skillsElegidas -eq 0) { $status['skills'] = 'SALTADO' }
-    else { $status['skills'] = "OK - $skillsInstaladas nuevas" }
-}
+$null=Invoke-ForjaSkillsTool
 
 # ============================================================
 #  RESUMEN DE INSTALACION

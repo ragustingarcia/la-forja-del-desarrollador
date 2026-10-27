@@ -11,7 +11,9 @@ Antigravity App e IDE, Gemini Desktop, Grok Bot y la app ChatGPT/Codex; las CLI 
 separadamente. El modo 2 consulta las herramientas instaladas y conserva un resultado por entrada.
 El modo 3 es de diagnóstico; el modo 4 explica el stack por proyecto sin ejecutar las recetas.
 El menú reúne la base y las herramientas adicionales por categoría, con líneas adaptadas al ancho
-de la consola. La opción 5 muestra el catálogo completo por páginas y permite volver al menú.
+de la consola. Cada entrada tiene una explicación simple y un código `T01`…`T49` para instalar o
+actualizar solo esa selección. Las guías no ejecutan instaladores. La opción 5 muestra el catálogo
+por páginas y permite volver al menú. El menú principal conserva el listado completo y espaciado.
 
 El catálogo adicional tiene 25 entradas seleccionables. La entrada 26 corresponde al paquete
 nativo de Supabase, que se usa desde el paso existente de la base. El JSON distribuido y el
@@ -20,6 +22,20 @@ embebido en el BAT deben coincidir; no se carga una configuración externa mutab
 Las instalaciones WinGet nuevas comprueban su presencia antes y después del instalador. Las CLI
 npm comprueban el paquete registrado y el ejecutable; no basta con un exit code 0 del instalador.
 Un fallo de una herramienta no interrumpe el recorrido de las demás ni borra su estado del resumen.
+
+## Descargas y actualizaciones pendientes
+
+Las descargas HTTPS directas muestran bytes recibidos, MB totales y porcentaje cuando el servidor
+informa Content-Length. El 100% aparece después de recibir el archivo completo y vaciar el búfer;
+la verificación de hash y la instalación ocurren después. Sin tamaño total se muestra actividad,
+sin inventar un porcentaje. WinGet, npm, pip y Git usan una barra de actividad mientras trabajan.
+Los mensajes y códigos reales del proveedor se conservan para el resultado final.
+
+El código WinGet `0x8A150114` (`-1978334956`) significa que ese instalador no admite la actualización.
+Se informa como pendiente y no se reintenta automáticamente: Android Studio indica usar
+`Help > Check for Updates`; Miniforge indica conservar y usar su gestor Conda original, sin migrar
+entornos. Esto no afirma que esas herramientas hayan quedado actualizadas.
+La definición está en el [encabezado oficial de WinGet](https://github.com/microsoft/winget-cli/blob/master/src/AppInstallerSharedLib/Public/AppInstallerErrors.h).
 
 ## Agentes y sus CLI
 
@@ -119,13 +135,20 @@ requieren actualizar el catálogo revisado de Forja; no se descargan automática
 
 ## Evidencia y límites
 
-Validación local en PowerShell 5.1 y 7: **223 casos por shell** (81 de seguridad, 14 flujos,
-5 de ejecución nativa, 11 Python, 16 MSI y 96 del catálogo/stack), sin fallos.
+Validación local en PowerShell 5.1 y 7: **260 casos por shell** (84 de seguridad, 18 flujos,
+5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack y 30 de progreso/selección individual), sin fallos.
 
 Las pruebas aisladas cubren selección y resumen completos, versiones Python coexistentes, rechazo
 de instalación de una rama nueva, confirmación fallida, separación de Flask/OpenCV, paquetes npm
 malformados, CLI rota, Store sin acceso, elección de proyecto y hashes/rutas ZIP inválidos. Se
 conservan las baterías previas de seguridad, MSI y shims CMD bajo política Restricted.
+
+Las pruebas nuevas comprueban los 49 códigos, descripciones y ancho de tarjetas; selección individual,
+cancelación, guías y códigos inválidos; flujos con y sin tamaño total, descargas incompletas y rechazo
+de sobrescrituras; argumentos nativos con espacios, comillas y metacaracteres. El adaptador de
+procesos conserva stdout, stderr y exit code de un proceso inerte, y prueba `npm --version` sin instalar.
+Una descarga real de Render por el nuevo transporte recibió 9.744.413 bytes con SHA-256 coincidente
+en PowerShell 5.1; no se extrajo ni ejecutó ese archivo durante esa prueba.
 
 También se extrajeron los tres ZIP reales **solo bajo un directorio de trabajo**, con comprobación
 SHA-256 y prueba de versión en Windows PowerShell 5.1. No se instalaron los nuevos agentes ni CLI

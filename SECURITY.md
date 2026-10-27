@@ -83,6 +83,18 @@ No se ejecuta npx para descargar software implícitamente, ni se recorre el disc
 Las recetas de frontend y conexiones no realizan despliegues ni solicitudes de escritura a servicios.
 El perfil Flask/OpenCV usa un venv distinto; el Python compartido y Conda permanecen separados.
 
+## Transporte de descargas y progreso
+
+El transporte usa HttpClient con lectura en streaming, límites de tamaño y tiempos de espera.
+Valida HTTPS y ausencia de credenciales en cada salto, con un máximo de cinco redirecciones;
+el MSI de MongoDB no permite redirecciones. No altera la validación de certificados. El destino
+se crea sin sobrescribir y rechaza rutas reparse; se mantienen los controles de hash, ZIP y firma.
+
+La barra porcentual solo representa bytes recibidos, no el éxito de la instalación. Los gestores
+externos muestran actividad cuando no hay total medible. Sus procesos usan ejecutables absolutos,
+argumentos nativos y el directorio del sistema. npm se lanza mediante Node y npm-cli.js, sin shell
+de comandos intermedio ni cambios de allowScripts. Se conserva la salida y el código del proveedor.
+
 ## Probar antes de distribuir
 
 En una copia del repositorio:
@@ -96,6 +108,7 @@ pwsh -NoProfile -File .\tests\native-tools.tests.ps1
 pwsh -NoProfile -File .\tests\python-environment.tests.ps1
 pwsh -NoProfile -File .\tests\msi-repair.tests.ps1
 pwsh -NoProfile -File .\tests\stack.tests.ps1
+pwsh -NoProfile -File .\tests\progress-individual.tests.ps1
 ```
 
 `RemoteSigned` en ese comando afecta solo al proceso de prueba; no modifica polÃ­ticas persistentes

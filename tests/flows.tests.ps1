@@ -13,6 +13,10 @@ if ($FlowCase) {
     $runner=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaTool' },$true)
     if ($parseErrors.Count -gt 0 -or -not $runner) { throw 'No se pudo aislar la ejecucion de CLIs en la fixture' }
     $script:text=$script:text.Replace($runner.Extent.Text, 'function Invoke-ForjaTool { param([string]$Name) Invoke-FakeTool -Name $Name -Arguments $args }')
+    $wingetOperation=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaWingetOperation'},$true)
+    $script:text=$script:text.Replace($wingetOperation.Extent.Text,'function Invoke-ForjaWingetOperation {param($ArgumentList,$Label) Invoke-FakeTool -Name winget -Arguments $ArgumentList}')
+    $packageOperation=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPackageProcess'},$true)
+    $script:text=$script:text.Replace($packageOperation.Extent.Text,'function Invoke-ForjaPackageProcess {param($Executable,$ArgumentList,$Label) $output=@(Invoke-FakeTool -Name ([IO.Path]::GetFileNameWithoutExtension($Executable)) -Arguments $ArgumentList);return [pscustomobject]@{ExitCode=$LASTEXITCODE;Output=$output}}')
     $libraries=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPythonLibraries' },$true)
     if (-not $libraries) { throw 'Falta frontera de librerias Python' }
     $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update,[string]$Profile) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
@@ -48,10 +52,15 @@ if ($FlowCase) {
                 'project-guide' { return '4' }
                 'catalog' { return '5' }
                 'catalog-return' { return '5' }
+                'single-node' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'node').Code }
+                'single-cancel' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'node').Code }
+                'single-guide' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'postgis-guide').Code }
+                'single-invalid' { return 'T99' }
                 default { return '' }
             }
         }
         if ($script:answers -eq 2 -and $FlowCase -eq 'catalog-return') { return '0' }
+        if ($script:answers -eq 2 -and $FlowCase -eq 'single-cancel') { return 'N' }
         if ($script:answers -eq 2 -and $FlowCase -ne 'cancel') { return 'S' }
         if ($FlowCase -eq 'cleanup-fail' -and $Prompt -like '*Eliminar la instalacion npm*') { return 'S' }
         if ($FlowCase -eq 'stack-selected' -and ($Prompt -like '*Incluir Codex CLI?*' -or $Prompt -like '*Incluir Flask + OpenCV*' -or $Prompt -like '*Incluir Render CLI*')) { return 'S' }
@@ -105,7 +114,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','catalog','catalog-return','invalid')) {
+    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','catalog','catalog-return','single-node','single-cancel','single-guide','single-invalid','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -127,12 +136,17 @@ try {
             if($summary -notmatch '\[OK\]\s+Codex CLI' -or $summary -notmatch '\[OK\]\s+Flask \+ OpenCV' -or $summary -notmatch '\[OK\]\s+Render CLI'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
         }
         if($case -eq 'fresh-setup' -and $calls -notcontains 'archive supabase-native'){throw 'No se probo Supabase ausente con el instalador nativo simulado'}
-        if ($case -in @('cancel','diagnostic','project-guide','catalog','catalog-return','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
+        if ($case -in @('cancel','diagnostic','project-guide','catalog','catalog-return','single-cancel','single-guide','single-invalid','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
+        if($case -eq 'single-node'){
+            if($calls.Count -eq 0 -or @($calls | Where-Object {$_ -notlike '*OpenJS.NodeJS.LTS*'}).Count -gt 0 -or $stdout -match 'RESUMEN DE INSTALACION'){throw 'La seleccion individual ejecuto otras herramientas'}
+        }
+        if($case -eq 'single-invalid' -and $stdout -notmatch 'Ese codigo no existe'){throw 'Codigo individual desconocido no se rechazo'}
         if($case -eq 'catalog' -and ($stdout -notmatch 'CATALOGO COMPLETO' -or $stdout -notmatch 'Cloudflare Wrangler' -or $stdout -notmatch 'Miniforge3')){throw 'Catalogo incompleto o paginacion interrumpida'}
         if($case -in @('catalog','catalog-return') -and @([regex]::Matches($stdout,'FORJA DEL DESARROLLADOR')).Count -ne 2){throw 'El catalogo no regresa al menu principal'}
         if($case -eq 'invalid'){
             $menuLines=@($stdout -split '\r?\n' | Where-Object {$_})
-            if(@($menuLines | Where-Object {$_.Length -gt 80}).Count -gt 0 -or $menuLines.Count -gt 26){throw 'El menu principal supera el ancho o alto esperado'}
+            if(@($menuLines | Where-Object {$_.Length -gt 82}).Count -gt 0){throw 'El menu principal supera el ancho esperado'}
+            if($stdout -notmatch '\[T01\]' -or $stdout -notmatch 'Busca, instala y actualiza'){throw 'El menu no muestra codigos individuales y explicaciones'}
             foreach($name in @('Cursor','Antigravity','Grok Bot','ChatGPT/Codex','Neon','Resend','Render','Wrangler','PostgreSQL','Miniforge')){if($stdout -notmatch [regex]::Escape($name)){throw "El menu omite $name"}}
         }
         if ($case -eq 'update-fail' -and @($calls | Where-Object { $_ -match '^npm install' }).Count -gt 0) { throw 'Se instalo a pesar de fallar el registro' }

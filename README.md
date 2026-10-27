@@ -20,7 +20,12 @@ Descargá `forja-del-desarrollador.bat` y abrilo con doble clic, **sin ejecutar 
 | **[3] Diagnóstico** | Muestra rutas, registro Store y ubicaciones de paquetes nativos revisados; no instala ni autentica. |
 | **[4] Stack por proyecto** | Muestra recetas para frontend, Flask/OpenCV, PostGIS y conexiones; no ejecuta esas recetas. |
 | **[5] Catálogo completo** | Lista todas las herramientas por páginas; permite volver al menú sin instalar. |
+| **[T01] … [T49]** | Instala o actualiza únicamente la selección elegida; las guías muestran instrucciones. |
 | **[0] / ENTER** | Sale sin cambios. |
+
+El menú es espaciado y está agrupado por categorías. Cada entrada explica para qué sirve en términos simples. Escribí su código (por ejemplo, `T05` para Node.js) para actuar sobre esa herramienta, sin recorrer el setup completo. La selección muestra su explicación y pide confirmación antes de instalar o actualizar.
+
+Las descargas directas muestran una barra con porcentaje y MB recibidos. WinGet, npm, pip y Git muestran una barra de actividad cuando no informan un total medible; los avisos del proveedor se conservan. Si WinGet no permite actualizar Android Studio o Miniforge, quedan pendientes con indicaciones del gestor original.
 
 No incluye controladores ni aplicaciones de uso diario. Cada agente conserva su propia configuración, skills y MCP.
 
@@ -60,7 +65,7 @@ El asistente de conexión de la base conserva los pasos de GitHub, Netlify, Verc
 | Python cientifico | Miniforge3 | winget |
 | Python cientifico | Flask + OpenCV + NumPy (venv aislado) | python-venv |
 
-El catálogo legible está en [catalog/stack-ia.json](catalog/stack-ia.json). El BAT incluye una copia idéntica, por lo que sigue siendo un archivo único para el usuario. Los tests comprueban esa identidad.
+Los catálogos legibles están en [catalog/base.json](catalog/base.json) y [catalog/stack-ia.json](catalog/stack-ia.json). El BAT incluye una copia idéntica, por lo que sigue siendo un archivo único para el usuario. Los tests comprueban esa identidad.
 
 **Apps y CLI se tratan por separado.** Cursor y Cursor Agent son entradas diferentes; también Antigravity App, IDE y `agy`, y la app ChatGPT/Codex frente a `codex`. No se instala un paquete Grok CLI de terceros: no se verificó una CLI independiente de Grok Bot.
 

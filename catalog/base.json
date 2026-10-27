@@ -1,0 +1,218 @@
+[
+  {
+    "Id": "winget",
+    "Group": "Infraestructura",
+    "Name": "WinGet",
+    "Method": "bootstrap-winget",
+    "Description": "Busca, instala y actualiza programas de Windows.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "powershell",
+    "Group": "Infraestructura",
+    "Name": "PowerShell 7",
+    "Method": "winget",
+    "Description": "Terminal moderna para ejecutar comandos y automatizar tareas.",
+    "Package": "Microsoft.PowerShell",
+    "Command": "pwsh"
+  },
+  {
+    "Id": "wsl",
+    "Group": "Infraestructura",
+    "Name": "WSL",
+    "Method": "wsl-runtime",
+    "Description": "Permite usar Linux dentro de Windows; tambien lo usa Docker.",
+    "Package": "",
+    "Command": "wsl"
+  },
+  {
+    "Id": "git",
+    "Group": "Infraestructura",
+    "Name": "Git",
+    "Method": "winget",
+    "Description": "Guarda el historial del codigo y permite colaborar con otras personas.",
+    "Package": "Git.Git",
+    "Command": "git"
+  },
+  {
+    "Id": "node",
+    "Group": "Lenguajes",
+    "Name": "Node.js LTS + npm",
+    "Method": "winget",
+    "Description": "Ejecuta JavaScript y administra las dependencias de tus proyectos web.",
+    "Package": "OpenJS.NodeJS.LTS",
+    "Command": "node"
+  },
+  {
+    "Id": "pnpm",
+    "Group": "Lenguajes",
+    "Name": "pnpm",
+    "Method": "winget",
+    "Description": "Instala paquetes JavaScript ahorrando espacio y compartiendo descargas.",
+    "Package": "pnpm.pnpm",
+    "Command": "pnpm"
+  },
+  {
+    "Id": "python",
+    "Group": "Lenguajes",
+    "Name": "Python",
+    "Method": "python-runtime",
+    "Description": "Lenguaje para APIs, automatizacion, datos e inteligencia artificial.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "python-base",
+    "Group": "Python cientifico",
+    "Name": "Librerias Python base",
+    "Method": "python-libraries",
+    "Description": "Entorno aislado con herramientas para APIs, PDF y conexiones web.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "vscode",
+    "Group": "Editores y agentes",
+    "Name": "VS Code",
+    "Method": "winget",
+    "Description": "Editor para abrir proyectos, programar y usar extensiones.",
+    "Package": "Microsoft.VisualStudioCode",
+    "Command": "code"
+  },
+  {
+    "Id": "claude-code",
+    "Group": "CLI de agentes",
+    "Name": "Claude Code CLI",
+    "Method": "claude-runtime",
+    "Description": "Agente de Anthropic para programar y revisar proyectos desde una terminal.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "claude-app",
+    "Group": "Editores y agentes",
+    "Name": "Claude App",
+    "Method": "winget",
+    "Description": "Aplicacion de Claude para conversar, trabajar con archivos y usar sus agentes.",
+    "Package": "Anthropic.Claude",
+    "Command": ""
+  },
+  {
+    "Id": "github",
+    "Group": "Utilidades",
+    "Name": "GitHub CLI",
+    "Method": "winget",
+    "Description": "Trabaja con repositorios y propuestas de cambios de GitHub desde la terminal.",
+    "Package": "GitHub.cli",
+    "Command": "gh"
+  },
+  {
+    "Id": "docker",
+    "Group": "Bases de datos locales",
+    "Name": "Docker Desktop",
+    "Method": "winget",
+    "Description": "Ejecuta aplicaciones y bases de datos en contenedores separados.",
+    "Package": "Docker.DockerDesktop",
+    "Command": "docker"
+  },
+  {
+    "Id": "mongosh",
+    "Group": "Bases de datos locales",
+    "Name": "MongoDB Shell (mongosh)",
+    "Method": "winget",
+    "Description": "Cliente para consultar una base MongoDB; no instala el servidor.",
+    "Package": "MongoDB.Shell",
+    "Command": "mongosh"
+  },
+  {
+    "Id": "ollama",
+    "Group": "Utilidades",
+    "Name": "Ollama",
+    "Method": "winget",
+    "Description": "Descarga y ejecuta modelos de IA localmente en tu computadora.",
+    "Package": "Ollama.Ollama",
+    "Command": "ollama"
+  },
+  {
+    "Id": "ffmpeg",
+    "Group": "Utilidades",
+    "Name": "FFmpeg",
+    "Method": "winget",
+    "Description": "Convierte, recorta y procesa audio y video desde comandos.",
+    "Package": "Gyan.FFmpeg",
+    "Command": "ffmpeg"
+  },
+  {
+    "Id": "netlify",
+    "Group": "Servicios cloud",
+    "Name": "Netlify CLI",
+    "Method": "npm",
+    "Description": "Prueba y administra sitios web publicados en Netlify.",
+    "Package": "netlify-cli",
+    "Command": "netlify"
+  },
+  {
+    "Id": "vercel",
+    "Group": "Servicios cloud",
+    "Name": "Vercel CLI",
+    "Method": "npm",
+    "Description": "Prueba y administra aplicaciones web publicadas en Vercel.",
+    "Package": "vercel",
+    "Command": "vercel"
+  },
+  {
+    "Id": "supabase",
+    "Group": "Servicios cloud",
+    "Name": "Supabase CLI",
+    "Method": "supabase",
+    "Description": "Trabaja con la base, los usuarios, archivos y funciones de Supabase.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "snyk",
+    "Group": "Utilidades",
+    "Name": "Snyk CLI",
+    "Method": "npm",
+    "Description": "Analiza dependencias y busca vulnerabilidades conocidas.",
+    "Package": "snyk",
+    "Command": "snyk"
+  },
+  {
+    "Id": "skills",
+    "Group": "Integracion",
+    "Name": "Skills opcionales de Claude",
+    "Method": "skills",
+    "Description": "Agrega recetas para que Claude pueda realizar tareas especializadas.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "connections",
+    "Group": "Integracion",
+    "Name": "Guia de conexiones",
+    "Method": "guidance",
+    "Description": "Explica como iniciar sesion en los servicios sin copiar claves en Forja.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "frontend-guide",
+    "Group": "Por proyecto",
+    "Name": "React / TypeScript / Vite / Tailwind",
+    "Method": "guidance",
+    "Description": "Guia para preparar una interfaz web, PWA o extension de Chrome.",
+    "Package": "",
+    "Command": ""
+  },
+  {
+    "Id": "postgis-guide",
+    "Group": "Por proyecto",
+    "Name": "PostGIS",
+    "Method": "guidance",
+    "Description": "Guia para agregar funciones de mapas y ubicaciones a PostgreSQL.",
+    "Package": "",
+    "Command": ""
+  }
+]

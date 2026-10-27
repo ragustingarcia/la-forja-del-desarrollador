@@ -185,6 +185,7 @@ try {
     $script:storeState='error';$script:storeCalls=0;$script:storeQueries=0
     function Get-ForjaStoreApp {param($Tool) $script:storeQueries++;return [pscustomobject]@{State=$script:storeState;Version='1.2.3'}}
     function winget {$script:storeCalls++;$script:storeArgs=$args;$script:storeState='installed';$global:LASTEXITCODE=0}
+    function Invoke-ForjaWingetOperation {param($ArgumentList,$Label) & winget @ArgumentList}
     $storeTool=$catalog | Where-Object Id -eq 'codex-app'
     Assert ((Invoke-ForjaStackTool $storeTool) -eq 'pendiente' -and $script:storeCalls -eq 0) 'fallo consulta Store no dispara instalacion'
     $script:storeState='absent'

@@ -6,7 +6,8 @@
     "Method": "winget",
     "Package": "Anysphere.Cursor",
     "Command": "cursor",
-    "Docs": "https://cursor.com/downloads"
+    "Docs": "https://cursor.com/downloads",
+    "Description": "Editor de codigo con IA para escribir, entender y corregir proyectos."
   },
   {
     "Id": "antigravity",
@@ -15,7 +16,8 @@
     "Method": "winget",
     "Package": "Google.Antigravity",
     "Command": "antigravity",
-    "Docs": "https://antigravity.google/download"
+    "Docs": "https://antigravity.google/download",
+    "Description": "Aplicacion para organizar y supervisar tareas de agentes de IA."
   },
   {
     "Id": "antigravity-ide",
@@ -24,7 +26,8 @@
     "Method": "winget",
     "Package": "Google.AntigravityIDE",
     "Command": "antigravity-ide",
-    "Docs": "https://antigravity.google/download"
+    "Docs": "https://antigravity.google/download",
+    "Description": "Editor de codigo de Google con agentes de IA integrados."
   },
   {
     "Id": "gemini-app",
@@ -33,7 +36,8 @@
     "Method": "winget",
     "Package": "Google.GeminiDesktop",
     "Command": "",
-    "Docs": "https://gemini.google/"
+    "Docs": "https://gemini.google/",
+    "Description": "Aplicacion de Gemini para conversar con la IA y trabajar con archivos."
   },
   {
     "Id": "grok-bot",
@@ -42,7 +46,8 @@
     "Method": "winget",
     "Package": "xAI.GrokBot",
     "Command": "",
-    "Docs": "https://docs.x.ai/grok-bot/get-started"
+    "Docs": "https://docs.x.ai/grok-bot/get-started",
+    "Description": "Asistente que realiza tareas usando aplicaciones y servicios conectados."
   },
   {
     "Id": "codex-app",
@@ -52,7 +57,8 @@
     "Package": "9PLM9XGG6VKS",
     "Appx": "OpenAI.Codex",
     "Command": "",
-    "Docs": "https://learn.chatgpt.com/docs/app/windows"
+    "Docs": "https://learn.chatgpt.com/docs/app/windows",
+    "Description": "Interfaz visual de ChatGPT/Codex para trabajar con agentes y proyectos."
   },
   {
     "Id": "codex-cli",
@@ -61,7 +67,8 @@
     "Method": "npm",
     "Package": "@openai/codex",
     "Command": "codex",
-    "Docs": "https://learn.chatgpt.com/docs/codex/cli"
+    "Docs": "https://learn.chatgpt.com/docs/codex/cli",
+    "Description": "Agente de OpenAI para escribir y revisar codigo desde una terminal."
   },
   {
     "Id": "agy-cli",
@@ -70,7 +77,8 @@
     "Method": "winget",
     "Package": "Google.AntigravityCLI",
     "Command": "agy",
-    "Docs": "https://antigravity.google/docs/getting-started"
+    "Docs": "https://antigravity.google/docs/getting-started",
+    "Description": "Agente de Google para programar y ejecutar tareas desde la terminal."
   },
   {
     "Id": "cursor-cli",
@@ -84,7 +92,8 @@
     "Executable": "dist-package/node.exe",
     "Script": "dist-package/index.js",
     "Launcher": "forja-agent.cmd",
-    "Docs": "https://prod.cursor.com/docs/cli/installation"
+    "Docs": "https://prod.cursor.com/docs/cli/installation",
+    "Description": "Agente de Cursor para trabajar en un proyecto desde la terminal."
   },
   {
     "Id": "gemini-cli",
@@ -94,7 +103,8 @@
     "Package": "@google/gemini-cli",
     "Command": "gemini",
     "Notice": "Google retiro el acceso de cuentas personales a Gemini CLI. Preferi agy; revisa tu tipo de cuenta antes de instalar Gemini CLI.",
-    "Docs": "https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals"
+    "Docs": "https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals",
+    "Description": "Cliente de Gemini en terminal para cuentas compatibles; revisar su disponibilidad."
   },
   {
     "Id": "neon-cli",
@@ -103,7 +113,8 @@
     "Method": "npm",
     "Package": "neon",
     "Command": "neon",
-    "Docs": "https://neon.com/docs/cli/install"
+    "Docs": "https://neon.com/docs/cli/install",
+    "Description": "Administra tus bases PostgreSQL alojadas en Neon."
   },
   {
     "Id": "resend-cli",
@@ -112,7 +123,8 @@
     "Method": "npm",
     "Package": "resend-cli",
     "Command": "resend",
-    "Docs": "https://resend.com/docs/cli"
+    "Docs": "https://resend.com/docs/cli",
+    "Description": "Administra el servicio de correo de Resend desde la terminal."
   },
   {
     "Id": "render-cli",
@@ -126,7 +138,8 @@
     "Executable": "render.exe",
     "Script": "",
     "Launcher": "forja-render.cmd",
-    "Docs": "https://render.com/docs/cli"
+    "Docs": "https://render.com/docs/cli",
+    "Description": "Administra aplicaciones y servicios alojados en Render."
   },
   {
     "Id": "cloudflared",
@@ -135,7 +148,8 @@
     "Method": "winget",
     "Package": "Cloudflare.cloudflared",
     "Command": "cloudflared",
-    "Docs": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+    "Docs": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
+    "Description": "Conecta un servicio de tu PC con Cloudflare mediante un tunel."
   },
   {
     "Id": "wrangler",
@@ -144,7 +158,8 @@
     "Method": "project-npm",
     "Package": "wrangler",
     "Command": "wrangler",
-    "Docs": "https://developers.cloudflare.com/workers/wrangler/install-and-update/"
+    "Docs": "https://developers.cloudflare.com/workers/wrangler/install-and-update/",
+    "Description": "Desarrolla y publica Workers o Pages de Cloudflare desde un proyecto."
   },
   {
     "Id": "postgresql",
@@ -153,7 +168,8 @@
     "Method": "winget",
     "Package": "PostgreSQL.PostgreSQL.17",
     "Command": "psql",
-    "Docs": "https://www.postgresql.org/download/windows/"
+    "Docs": "https://www.postgresql.org/download/windows/",
+    "Description": "Servidor de base de datos para guardar y consultar informacion estructurada."
   },
   {
     "Id": "rust",
@@ -163,7 +179,8 @@
     "Package": "Rustlang.Rustup",
     "Command": "rustup",
     "Notice": "WinGet gestiona rustup. Los toolchains se actualizan por separado con rustup update, segun cada proyecto.",
-    "Docs": "https://www.rust-lang.org/tools/install"
+    "Docs": "https://www.rust-lang.org/tools/install",
+    "Description": "Instala y administra las herramientas para compilar programas Rust."
   },
   {
     "Id": "buildtools",
@@ -173,7 +190,8 @@
     "Package": "Microsoft.VisualStudio.2022.BuildTools",
     "Command": "",
     "Notice": "El instalador permite elegir workloads. Revisa C++ y Windows SDK para Tauri o extensiones nativas; no se marcan como instalados solo por tener Build Tools.",
-    "Docs": "https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022"
+    "Docs": "https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022",
+    "Description": "Compiladores de Windows que necesitan algunas apps y librerias nativas."
   },
   {
     "Id": "dotnet",
@@ -182,7 +200,8 @@
     "Method": "winget",
     "Package": "Microsoft.DotNet.SDK.10",
     "Command": "dotnet",
-    "Docs": "https://dotnet.microsoft.com/download"
+    "Docs": "https://dotnet.microsoft.com/download",
+    "Description": "Herramientas para crear y compilar aplicaciones de la plataforma .NET."
   },
   {
     "Id": "inno",
@@ -191,7 +210,8 @@
     "Method": "winget",
     "Package": "JRSoftware.InnoSetup",
     "Command": "ISCC",
-    "Docs": "https://jrsoftware.org/isinfo.php"
+    "Docs": "https://jrsoftware.org/isinfo.php",
+    "Description": "Crea instaladores de Windows para distribuir tus propias aplicaciones."
   },
   {
     "Id": "android",
@@ -201,7 +221,8 @@
     "Package": "Google.AndroidStudio",
     "Command": "",
     "Notice": "SDK, emuladores y plataformas Android se eligen despues desde SDK Manager.",
-    "Docs": "https://developer.android.com/studio"
+    "Docs": "https://developer.android.com/studio",
+    "Description": "Entorno para crear, probar y compilar aplicaciones Android."
   },
   {
     "Id": "jdk17",
@@ -211,7 +232,8 @@
     "Package": "EclipseAdoptium.Temurin.17.JDK",
     "Command": "java",
     "Docs": "https://adoptium.net/installation/",
-    "Scoop": "temurin17-jdk"
+    "Scoop": "temurin17-jdk",
+    "Description": "Herramientas Java 17 que usan determinados proyectos y versiones de Gradle."
   },
   {
     "Id": "jdk21",
@@ -222,7 +244,8 @@
     "Command": "java",
     "Notice": "JDK 17 y 21 pueden convivir. JAVA_HOME y el JDK de Gradle se eligen por proyecto.",
     "Docs": "https://adoptium.net/installation/",
-    "Scoop": "temurin21-jdk"
+    "Scoop": "temurin21-jdk",
+    "Description": "Herramientas Java 21 para los proyectos que necesitan esa version."
   },
   {
     "Id": "miniforge",
@@ -232,7 +255,8 @@
     "Package": "CondaForge.Miniforge3",
     "Command": "conda",
     "Notice": "Forja gestiona el instalador de Miniforge, no modifica ni migra sus entornos Conda.",
-    "Docs": "https://github.com/conda-forge/miniforge"
+    "Docs": "https://github.com/conda-forge/miniforge",
+    "Description": "Organiza entornos Python y paquetes cientificos con Conda."
   },
   {
     "Id": "python-web-vision",
@@ -240,7 +264,8 @@
     "Name": "Flask + OpenCV + NumPy (venv aislado)",
     "Method": "python-venv",
     "Command": "",
-    "Docs": "https://docs.python.org/3/library/venv.html"
+    "Docs": "https://docs.python.org/3/library/venv.html",
+    "Description": "Entorno separado para crear APIs Flask y procesar imagenes con OpenCV."
   },
   {
     "Id": "supabase-native",
@@ -255,6 +280,7 @@
     "Executable": "supabase.exe",
     "Script": "",
     "Launcher": "forja-supabase.cmd",
-    "Docs": "https://supabase.com/docs/guides/local-development/cli/getting-started"
+    "Docs": "https://supabase.com/docs/guides/local-development/cli/getting-started",
+    "Description": "Cliente para trabajar con bases, autenticacion y funciones de Supabase."
   }
 ]
