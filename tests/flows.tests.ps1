@@ -1,0 +1,97 @@
+param([string]$FlowCase, [string]$Evidence)
+$ErrorActionPreference = 'Stop'
+$repoRoot = Split-Path $PSScriptRoot -Parent
+if ($FlowCase) {
+    $script:calls = New-Object 'System.Collections.Generic.List[string]'
+    $script:answers = 0
+    $script:text = [IO.File]::ReadAllText((Join-Path $repoRoot 'forja-del-desarrollador.bat'))
+    # Fixture en memoria: CI puede ser administrador. Solo se omite el guard de identidad
+    # para recorrer modos con herramientas simuladas. El archivo del producto no se modifica.
+    $script:text = $script:text.Replace('if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {', 'if ($false) {')
+    function global:Clear-Host {}
+    function global:Read-Host { param($Prompt)
+        $script:answers++
+        if ($script:answers -eq 1) {
+            switch ($FlowCase) {
+                'setup-ok' { return '1' }
+                'setup-fail' { return '1' }
+                'update-fail' { return '2' }
+                'cancel' { return '1' }
+                'diagnostic' { return '3' }
+                default { return '' }
+            }
+        }
+        if ($script:answers -eq 2 -and $FlowCase -ne 'cancel') { return 'S' }
+        return 'N'
+    }
+    function global:Start-Process { throw 'PROHIBIDO iniciar procesos reales en estos flujos' }
+    function Invoke-FakeTool { param([string]$Name, [object[]]$Arguments)
+        $script:calls.Add(($Name + ' ' + ($Arguments -join ' ')))
+        $global:LASTEXITCODE = 0
+        if ($FlowCase -eq 'setup-fail') { $global:LASTEXITCODE = 1; return 'SIMULATED_ERROR' }
+        if ($FlowCase -eq 'update-fail') {
+            if ($Name -eq 'winget' -and $Arguments -notcontains '--upgrade-available') {
+                $i = [array]::IndexOf($Arguments, '--id'); return "$($Arguments[$i+1]) 1.0.0"
+            }
+            if ($Name -eq 'npm' -and $Arguments[0] -eq 'list') { return "$($Arguments[2])@1.0.0" }
+            if ($Name -eq 'cmd' -and ($Arguments -join ' ') -match 'wsl --status') { return '' }
+            if ($Name -eq 'pip' -and $Arguments[0] -eq '--version') { return 'pip 24.0' }
+            $global:LASTEXITCODE = 5; return 'SIMULATED_ERROR'
+        }
+        switch ($Name) {
+            'npm' { if ($Arguments[0] -eq 'list') { return "$($Arguments[2])@1.0.0" }; return '1.0.0' }
+            'winget' { $i = [array]::IndexOf($Arguments, '--id'); if ($i -ge 0) { return "$($Arguments[$i+1]) 1.0.0" }; return 'v1.0.0' }
+            'git' { return 'fixture identity' }
+            'python' { if ($Arguments -contains 'pip') { return 'pip 24.0' }; return 'Python 3.13.0' }
+            'pip' { return 'pip 24.0' }
+            'netlify' { return 'Logged in' }
+            'vercel' { return 'fixture-user' }
+            'supabase' { return 'Name ID' }
+            'docker' { return 'Server Version: 1.0' }
+            default { return '1.0.0' }
+        }
+    }
+    foreach ($name in @('winget','npm','python','pip','git','claude','gh','netlify','vercel','supabase','snyk','docker','wsl','cmd','pwsh','node','pnpm','ffmpeg','mongosh','ollama','code','reg')) {
+        $body = 'Invoke-FakeTool -Name ''' + $name + ''' -Arguments $args'
+        Set-Item -Path ("Function:global:$name") -Value ([scriptblock]::Create($body))
+    }
+    try { & ([scriptblock]::Create($script:text)) }
+    finally { [IO.File]::WriteAllLines($Evidence, $script:calls.ToArray()) }
+    exit 99 # el producto tiene que salir con su propio codigo
+}
+
+$sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($sandbox) | Out-Null
+$shellExe = (Get-Process -Id $PID).Path
+$passed = 0
+try {
+    foreach ($case in @('setup-ok','setup-fail','update-fail','cancel','diagnostic','invalid')) {
+        $evidencePath = Join-Path $sandbox ($case + '.txt')
+        $psi = New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName = $shellExe
+        $psi.Arguments = '-NoProfile -ExecutionPolicy RemoteSigned -File "' + $PSCommandPath + '" -FlowCase ' + $case + ' -Evidence "' + $evidencePath + '"'
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $p = [Diagnostics.Process]::Start($psi)
+        $stdoutTask = $p.StandardOutput.ReadToEndAsync(); $stderrTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "Timeout $case" }
+        $stdout = $stdoutTask.Result; $stderr = $stderrTask.Result
+        $expected = 0
+        if ($case -in @('setup-fail','update-fail')) { $expected = 1 }
+        if ($p.ExitCode -ne $expected -or $stderr) { throw "$case : exit=$($p.ExitCode) esperado=$expected`n$stderr`n$stdout" }
+        $calls = @(Get-Content -LiteralPath $evidencePath)
+        if ($case -in @('cancel','diagnostic','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
+        if ($case -eq 'update-fail' -and @($calls | Where-Object { $_ -match '^npm install' }).Count -gt 0) { throw 'Se instalo a pesar de fallar el registro' }
+        if ($case -eq 'setup-fail' -and $stdout -notmatch '\[X\]') { throw 'No mostro errores de instalacion' }
+        $passed++
+        Write-Host "PASS flujo $case / exit $expected / $($calls.Count) invocaciones simuladas"
+    }
+    Write-Host "RESULTADO FLUJOS: $passed PASS / 0 FAIL"
+} finally {
+    $full = [IO.Path]::GetFullPath($sandbox)
+    $parent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+    if ([IO.Path]::GetDirectoryName($full) -ne $parent -or [IO.Path]::GetFileName($full) -notmatch '^forja-flows-[0-9a-f]{32}$') { throw 'Raiz de prueba inesperada' }
+    # Solo archivos planos creados por este arnes; sin borrado recursivo.
+    foreach ($file in @(Get-ChildItem -LiteralPath $full -File)) { Remove-Item -LiteralPath $file.FullName }
+    [IO.Directory]::Delete($full)
+}

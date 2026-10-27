@@ -13,9 +13,9 @@
 
 ## Qué hace
 
-Un `.bat` que corre como Administrador, instala todo lo que necesitás para desarrollar con Claude Code en Windows, y te guía paso a paso para conectar cada servicio.
+Un `.bat` que corre en tu sesión normal de Windows, instala todo lo que necesitás para desarrollar con Claude Code en Windows, y te guía paso a paso para conectar cada servicio.
 
-Si algo ya está instalado, lo detecta y lo saltea. Si algo falla, te dice qué hacer. Podés correrlo múltiples veces sin romper nada.
+Si algo ya está instalado, lo detecta y lo saltea. Si algo falla, te dice qué hacer. Podés volver a correrlo: verifica instalaciones y conserva las skills que ya existen. Revisá siempre el resumen y los avisos de cada proveedor.
 
 ---
 
@@ -23,8 +23,8 @@ Si algo ya está instalado, lo detecta y lo saltea. Si algo falla, te dice qué 
 
 ```
 1. Descargá forja-del-desarrollador.bat
-2. Click derecho → "Ejecutar como administrador"
-3. Elegí el modo y seguí las instrucciones en pantalla
+2. Abrilo con doble clic, SIN "Ejecutar como administrador"
+3. Elegí el modo, confirmá y seguí las instrucciones en pantalla
 ```
 
 Al arrancar, el script pregunta qué modo querés:
@@ -32,9 +32,20 @@ Al arrancar, el script pregunta qué modo querés:
 | Modo | Qué hace |
 |---|---|
 | **[1] Setup completo** | Instala las 21 herramientas y te guía para vincular cada servicio |
-| **[2] Solo actualizar** | Recorre lo que ya tenés instalado y lo actualiza a la última versión, en la misma ventana |
+| **[2] Solo actualizar** | Recorre lo que ya tenés instalado y lo actualiza a la versión publicada, en la misma ventana |
+| **[3] Diagnóstico** | Muestra las rutas de herramientas disponibles, sin ejecutar instaladores ni logins |
+| **[0] Salir / ENTER** | Cierra sin instalar nada |
 
-Si Windows bloquea el script, click en "Más información" → "Ejecutar de todas formas".
+La Forja arranca con **Windows PowerShell 5.1**, incluido en Windows; no necesitás instalar
+PowerShell 7 previamente. Si abrís toda la Forja como administrador, se detiene. WSL pide
+UAC solo para su instalación y otros instaladores pueden mostrar su propio aviso de permisos.
+
+Descargá el BAT desde este repositorio y revisá el código antes de ejecutarlo. Si Windows o
+una política de tu organización lo bloquea, verificá el origen y consultá al administrador del equipo.
+La Forja no desactiva SmartScreen, antivirus ni políticas corporativas.
+
+**Seguridad y migración desde versiones anteriores:** [SECURITY.md](SECURITY.md).
+**Auditoría y límites de las pruebas:** [docs/AUDITORIA-SEGURIDAD-v6.1.md](docs/AUDITORIA-SEGURIDAD-v6.1.md).
 
 ---
 
@@ -44,7 +55,7 @@ Si Windows bloquea el script, click en "Más información" → "Ejecutar de toda
 | # | Herramienta | Para qué |
 |---|---|---|
 | 1 | winget | Gestor de paquetes de Windows |
-| 2 | PowerShell 7 | Terminal moderna (el script corre en pwsh) |
+| 2 | PowerShell 7 | Terminal moderna (se instala sin ser necesaria para arrancar) |
 | 3 | WSL | Linux dentro de Windows (necesario para Docker) |
 | 4 | Git | Control de versiones + configura nombre y email |
 
@@ -92,19 +103,19 @@ Si Windows bloquea el script, click en "Más información" → "Ejecutar de toda
 
 ---
 
-## Qué hace el paso 21 en particular
+## Qué hace el paso 22 en particular
 
 El asistente de vinculación verifica y conecta cada servicio:
 
 - **GitHub CLI** → `gh auth login` (navegador)
-- **Claude MCP GitHub** → configura `GITHUB_PERSONAL_ACCESS_TOKEN` como variable de entorno de usuario y registra el servidor `@modelcontextprotocol/server-github` en Claude Code
+- **Claude MCP GitHub** → opcional, con guía para configurar manualmente el servidor mantenido por GitHub y limitar sus permisos; la Forja no solicita ni guarda un PAT
 - **Netlify** → `netlify login` (navegador)
 - **Vercel** → `vercel login` (navegador o email)
 - **Supabase** → `supabase login` (navegador)
-- **Snyk** → ingreso manual de API token
+- **Snyk** → login por navegador con OAuth; verificación mediante `snyk whoami --experimental` (si no se puede verificar, queda pendiente)
 - **Docker** → verifica que Docker Desktop esté corriendo
 
-Si ya estás conectado a algún servicio, el script lo detecta y lo marca como OK sin pedirte nada.
+Si detecta una conexión válida, la marca como OK. Las conexiones que no puede verificar quedan pendientes; el MCP manual se muestra como opcional.
 
 ---
 
@@ -118,9 +129,12 @@ Una skill le enseña a Claude Code una capacidad nueva, y se carga **solo cuando
 
 En ambos casos **el crédito del desarrollador original se conserva** — es la única condición de uso.
 
-**Oficiales de Anthropic** — `skill-creator`, `docx`, `pdf`, `xlsx`, `pptx`. Se descargan directamente del repo oficial [anthropics/skills](https://github.com/anthropics/skills) (no se redistribuyen desde acá).
+**Oficiales de Anthropic** — `skill-creator`, `docx`, `pdf`, `xlsx`, `pptx`. Se descargan por una revisión fija del repo oficial [anthropics/skills](https://github.com/anthropics/skills) (no se redistribuyen desde acá).
 
-Las skills existentes en tu `~/.claude/skills` **nunca se pisan**: si ya tenés una con el mismo nombre, se saltea.
+Las skills existentes en tu `~/.claude/skills` **se conservan**: si ya tenés una con el mismo
+nombre, se saltea. Las nuevas se preparan fuera de esa carpeta y se mueven al completar la copia.
+Se rechazan enlaces y junctions en las rutas. El script muestra los SHA utilizados y no ejecuta
+el contenido descargado. Revisá las instrucciones antes de habilitarlas en Claude.
 
 ---
 
@@ -137,8 +151,8 @@ Las skills existentes en tu `~/.claude/skills` **nunca se pisan**: si ya tenés 
 
 - Algunos pasos instalan programas que necesitan **reiniciar la terminal o la PC** para que el PATH se actualice. El script te avisa cuándo. Podés volver a correrlo después del reinicio para completar los pasos pendientes.
 - Docker Desktop requiere reiniciar la PC después de instalarse.
-- El script **no toca ni borra** lo que ya tenés instalado.
-- El MCP de GitHub usa el servidor oficial `@modelcontextprotocol/server-github` vía NPX.
+- El setup puede instalar paquetes y configurar tu identidad Git. El modo actualización modifica versiones existentes; la limpieza opcional de Claude usa únicamente el desinstalador de npm, con confirmación.
+- El MCP antiguo por NPX ya no se configura. Si lo instalaste antes, seguí la migración de [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -147,14 +161,15 @@ Las skills existentes en tu `~/.claude/skills` **nunca se pisan**: si ya tenés 
 Corré el script y elegí el modo **[2] Solo actualizar**. Recorre las herramientas instaladas y las actualiza:
 
 - **winget**: PowerShell 7, Git, Node.js, pnpm, Python, VS Code, Claude Desktop, GitHub CLI, Docker, mongosh, Ollama, FFmpeg, Supabase CLI
-- **npm**: Claude Code CLI, Netlify CLI, Vercel CLI, Snyk CLI (a `@latest`)
+- **Claude Code CLI**: su propio comando `claude update`
+- **npm**: Netlify CLI, Vercel CLI y Snyk CLI, consultando e instalando una versión concreta
 - **WSL** y **librerías Python** (`pip --upgrade`)
 
 Lo que no está instalado se saltea sin preguntar. Al final muestra un resumen: actualizados / ya al día / saltados / con errores.
 
 > Tip: cerrá VS Code y Docker antes de actualizar — un programa abierto puede bloquear su propia actualización.
 
-**Caso especial — PowerShell 7**: el script corre en pwsh, así que no puede actualizarlo mientras se ejecuta. Si detecta un update disponible, al cerrar el script se abre una ventana aparte que lo actualiza automáticamente.
+**PowerShell 7** se actualiza en la misma ventana: el lanzador usa Windows PowerShell 5.1. Cerrá otras sesiones de PowerShell 7 si el instalador avisa que está en uso.
 
 **Caso especial — doble instalación de Claude Code**: si detecta que tenés Claude Code instalado dos veces (npm global + instalador nativo), te ofrece eliminar la npm y quedarte solo con la nativa (la recomendada por Anthropic). Requiere cerrar todas las sesiones de Claude Code primero — el script te lo avisa y pide confirmación.
 
@@ -166,6 +181,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v6.1 | **Seguridad**: sin elevación global ni bootstrap temporal; inicio con Windows PowerShell 5.1; diagnóstico; confirmación explícita; sin captura de tokens; skills por SHA fijo, sin enlaces ni sobrescrituras; verificación de fallos y pruebas Windows en CI |
 | v6.0 | **Paso 21 — Skills de Claude Code**: pack de la Forja (skills del autor con crédito preservado, opción de personalizar con tu nombre) + set oficial de Anthropic clonado de su repo; vinculaciones pasan a ser el paso 22 |
 | v5.8 | WSL: si la descarga desde Microsoft Store falla (403 `Wsl/UpdatePackage/0x80190193`), reintenta automáticamente con `--web-download` (baja desde GitHub) |
 | v5.7 | Detección de doble instalación de Claude Code (npm global + nativa): ofrece eliminar la npm y quedarse con la nativa, con confirmación y verificación posterior |
