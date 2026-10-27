@@ -8,6 +8,7 @@ if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 foreach ($definition in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     . ([scriptblock]::Create($definition.Extent.Text))
 }
+function Invoke-ForjaTool { param([string]$Name) & $Name @args }
 $passed = 0
 function Assert { param([bool]$Condition, [string]$Message)
     if (-not $Condition) { throw "FALLO: $Message" }
@@ -21,6 +22,12 @@ function Assert-Throws { param([scriptblock]$Action, [string]$Message)
 }
 function global:winget {
     $script:wingetArgs = @($args)
+    if ($script:wingetQueue -and $script:wingetQueue.Count -gt 0) {
+        $response=$script:wingetQueue.Dequeue()
+        $global:LASTEXITCODE=$response.Code
+        $response.Output
+        return
+    }
     $global:LASTEXITCODE = $script:mockWingetExit
     $script:mockWingetOutput
 }
@@ -68,10 +75,33 @@ try {
     Assert ((Get-WingetUpdateState 'Git.Git') -eq 'error') 'regex no confunde otro identificador'
     $script:mockWingetOutput = ''
     Assert ((Get-WingetUpdateState 'Git.Git') -eq 'error') 'salida vacia no se celebra'
-    foreach ($code in @(-1978335189, -1978335212)) {
-        $script:mockWingetExit = $code
-        Assert ((Get-WingetUpdateState 'Git.Git') -eq 'aldia') "sin update por codigo $code"
-    }
+    $script:mockWingetExit = -1978335212
+    Assert ((Get-WingetUpdateState 'Git.Git') -eq 'missing') 'inventario ausente no se presenta como al dia'
+    $script:mockWingetExit = -1978335189
+    Assert ((Get-WingetUpdateState 'Git.Git') -eq 'error') 'codigo de upgrade no se atribuye al inventario list'
+    $script:mockWingetExit = 0; $script:mockWingetOutput = 'Git  Git.Git 2.56.0.3'
+    $info = Get-WingetPackageInfo 'Git.Git'
+    Assert ($info.State -eq 'installed' -and $info.Version -eq '2.56.0.3' -and -not $info.Available) 'fila real de Git actualizado conserva version instalada'
+    Assert ((Get-WingetUpdateState 'Git.Git') -eq 'aldia') 'segunda pasada sin columna Available se reconoce al dia'
+    Assert (-not ($script:wingetArgs -contains '--source') -and -not ($script:wingetArgs -contains '--upgrade-available')) 'inventario evita filtros que ocultan instalaciones actualizadas'
+    $script:mockWingetOutput = 'PowerShell 7.6.9.0-x64 Microsoft.PowerShell 7.6.9.0 winget'
+    Assert ((Get-WingetPackageInfo 'Microsoft.PowerShell').Version -eq '7.6.9.0') 'PowerShell registrado sin filtrar fuente se reconoce'
+    $script:mockWingetOutput = 'No installed package found matching input criteria.'
+    Assert ((Get-WingetUpdateState 'Git.Git') -eq 'error') 'una consulta normal sin fila no inventa version instalada'
+    $script:ForjaWingetInventory=$null
+    $script:wingetQueue=New-Object 'System.Collections.Generic.Queue[object]'
+    $script:wingetQueue.Enqueue(@{Code=-1978335212;Output='No installed package found matching input criteria.'})
+    $script:wingetQueue.Enqueue(@{Code=0;Output="Name Id Version Source`r`nPowerShell 7 Microsoft.PowerShell 7.6.9.0 winget"})
+    Assert ((Get-WingetPackageInfo 'Microsoft.PowerShell').Version -eq '7.6.9.0') 'inventario general rescata PowerShell oculto por filtro exacto'
+    $script:wingetQueue.Enqueue(@{Code=0;Output='Git Git.Git 1.0.0 2.0.0 winget'})
+    $script:wingetQueue.Enqueue(@{Code=0;Output='Successfully installed'})
+    $script:wingetQueue.Enqueue(@{Code=0;Output='Git Git.Git 2.0.0'})
+    Assert ((Invoke-WingetUpdate 'Git.Git' 'Git') -eq 'ok') 'actualizacion confirma version instalada con otra consulta'
+    $script:wingetQueue.Enqueue(@{Code=0;Output='Git Git.Git 1.0.0 2.0.0 winget'})
+    $script:wingetQueue.Enqueue(@{Code=0;Output='Successfully installed'})
+    $script:wingetQueue.Enqueue(@{Code=0;Output='Git Git.Git 1.0.0'})
+    Assert ((Invoke-WingetUpdate 'Git.Git' 'Git') -eq 'error') 'exit cero sin version nueva no se presenta como actualizado'
+
 
     $script:npmCalls = @(); $script:npmListExit = 1; $script:npmListOutput = 'snyk@1.0.0 error'
     Assert (-not (Test-NpmPkg 'snyk')) 'npm list fallido no marca instalado'
@@ -87,6 +117,8 @@ try {
     Assert ($script:npmCalls[-1] -contains 'snyk@2.0.0') 'instala la version consultada y no una etiqueta mutable'
     $result = @(Install-Npm 'snyk' 'Snyk')
     Assert ($result.Count -eq 1 -and $result[0] -eq $false) 'Install-Npm no oculta fallo si paquete previo sigue presente'
+    $script:npmInstallExit=0
+    Assert ((Invoke-NpmUpdate 'snyk' 'Snyk') -eq 'error') 'npm exit cero con version previa no afirma actualizacion'
 
     foreach ($answer in @('','no','salir','si y borrar','yes')) {
         $script:mockAnswer = $answer
