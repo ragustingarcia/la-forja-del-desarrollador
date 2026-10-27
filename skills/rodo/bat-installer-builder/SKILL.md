@@ -7,7 +7,7 @@ description: Construye y revisa instaladores BAT para Windows con arranque hibri
 > Distribuida con [La Forja del Desarrollador](https://github.com/ragustingarcia/la-forja-del-desarrollador).
 > Si la adaptás o redistribuís, conservá este crédito. ¡Gracias!
 
-# Constructor de instaladores BAT | v6.1
+# Constructor de instaladores BAT | v6.1.1
 
 ## Alcance
 
@@ -52,6 +52,13 @@ return ($code -eq 0)
    Registrar reinicio y verificación pendientes cuando corresponda.
 9. Verificar todas las librerías Python requeridas con el mismo intérprete. No renombrar alias
    de Microsoft Store ni borrar instalaciones para solucionar un PATH ambiguo.
+10. No usar la ausencia de filas de `winget list --upgrade-available` como error: puede salir
+    con código 0 cuando ya está al día. Leer la versión desde el inventario instalado y, si el
+    filtro por ID no encuentra un paquete conocido, contrastarlo con el inventario general.
+11. En Windows PowerShell con política Restricted, `npm` puede elegir el shim `npm.ps1` bloqueado.
+    Resolver aplicaciones `.exe`/`.cmd` explícitamente para npm y sus CLIs. No cambiar la política.
+    Capturar fallos por herramienta para que se llegue al resumen. Probar shims CMD reales inertes
+    bajo Restricted, además de mocks; los mocks de funciones no reproducen este problema.
 
 ## Consentimiento y credenciales
 

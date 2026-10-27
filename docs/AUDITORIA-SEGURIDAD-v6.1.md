@@ -3,6 +3,10 @@
 Fecha: 27 de octubre de 2026. Base revisada: `39204a10fc5ce3027a3180cc69446266f9cefe7a` (v6.0).
 Actualización propuesta: v6.1. El informe describe código y pruebas; no acredita una release publicada.
 
+**Corrección posterior:** las pruebas reales del usuario revelaron defectos de segunda pasada y
+resolución de `npm.ps1` que los mocks iniciales no cubrían. Se corrigieron en v6.1.1 y se agregaron
+pruebas nativas bajo política Restricted. Ver [causas, evidencia y pruebas actualizadas](CORRECCION-v6.1.1.md).
+
 ## Resultado
 
 Se corrigieron riesgos de privilegios, exposición de tokens, manejo de temporales, descarga de skills

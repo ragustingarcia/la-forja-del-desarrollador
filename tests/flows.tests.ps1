@@ -8,6 +8,11 @@ if ($FlowCase) {
     # Fixture en memoria: CI puede ser administrador. Solo se omite el guard de identidad
     # para recorrer modos con herramientas simuladas. El archivo del producto no se modifica.
     $script:text = $script:text.Replace('if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {', 'if ($false) {')
+    $parseErrors=$null; $tokens=$null
+    $tree=[Management.Automation.Language.Parser]::ParseInput($script:text,[ref]$tokens,[ref]$parseErrors)
+    $runner=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaTool' },$true)
+    if ($parseErrors.Count -gt 0 -or -not $runner) { throw 'No se pudo aislar la ejecucion de CLIs en la fixture' }
+    $script:text=$script:text.Replace($runner.Extent.Text, 'function Invoke-ForjaTool { param([string]$Name) Invoke-FakeTool -Name $Name -Arguments $args }')
     function global:Clear-Host {}
     function global:Read-Host { param($Prompt)
         $script:answers++
@@ -16,21 +21,30 @@ if ($FlowCase) {
                 'setup-ok' { return '1' }
                 'setup-fail' { return '1' }
                 'update-fail' { return '2' }
+                'update-current' { return '2' }
+                'cleanup-fail' { return '2' }
                 'cancel' { return '1' }
                 'diagnostic' { return '3' }
                 default { return '' }
             }
         }
         if ($script:answers -eq 2 -and $FlowCase -ne 'cancel') { return 'S' }
+        if ($FlowCase -eq 'cleanup-fail' -and $Prompt -like '*Eliminar la instalacion npm*') { return 'S' }
         return 'N'
     }
     function global:Start-Process { throw 'PROHIBIDO iniciar procesos reales en estos flujos' }
+    function global:Test-Path { param([string]$Path,[string]$LiteralPath,[string]$PathType)
+        $candidate=$Path; if ($LiteralPath) { $candidate=$LiteralPath }
+        if ($FlowCase -eq 'cleanup-fail' -and ($candidate -like '*\npm\claude*' -or $candidate -like '*\.local\bin\claude.exe')) { return $true }
+        Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+    }
     function Invoke-FakeTool { param([string]$Name, [object[]]$Arguments)
         $script:calls.Add(($Name + ' ' + ($Arguments -join ' ')))
         $global:LASTEXITCODE = 0
+        if ($FlowCase -eq 'cleanup-fail' -and $Name -eq 'npm' -and $Arguments[0] -eq 'uninstall') { throw 'SIMULATED_START_FAILURE' }
         if ($FlowCase -eq 'setup-fail') { $global:LASTEXITCODE = 1; return 'SIMULATED_ERROR' }
         if ($FlowCase -eq 'update-fail') {
-            if ($Name -eq 'winget' -and $Arguments -notcontains '--upgrade-available') {
+            if ($Name -eq 'winget' -and $Arguments[0] -eq 'list' -and $Arguments -notcontains '--disable-interactivity') {
                 $i = [array]::IndexOf($Arguments, '--id'); return "$($Arguments[$i+1]) 1.0.0"
             }
             if ($Name -eq 'npm' -and $Arguments[0] -eq 'list') { return "$($Arguments[2])@1.0.0" }
@@ -65,7 +79,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','setup-fail','update-fail','cancel','diagnostic','invalid')) {
+    foreach ($case in @('setup-ok','setup-fail','update-fail','update-current','cleanup-fail','cancel','diagnostic','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -77,12 +91,18 @@ try {
         if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "Timeout $case" }
         $stdout = $stdoutTask.Result; $stderr = $stderrTask.Result
         $expected = 0
-        if ($case -in @('setup-fail','update-fail')) { $expected = 1 }
+        if ($case -in @('setup-fail','update-fail','cleanup-fail')) { $expected = 1 }
         if ($p.ExitCode -ne $expected -or $stderr) { throw "$case : exit=$($p.ExitCode) esperado=$expected`n$stderr`n$stdout" }
         $calls = @(Get-Content -LiteralPath $evidencePath)
         if ($case -in @('cancel','diagnostic','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
         if ($case -eq 'update-fail' -and @($calls | Where-Object { $_ -match '^npm install' }).Count -gt 0) { throw 'Se instalo a pesar de fallar el registro' }
         if ($case -eq 'setup-fail' -and $stdout -notmatch '\[X\]') { throw 'No mostro errores de instalacion' }
+        if ($case -eq 'update-current' -and $stdout -notmatch 'instalada: 1.0.0') { throw 'No muestra la version de segunda pasada' }
+        if ($case -eq 'cleanup-fail') {
+            $uninstall=[array]::FindIndex([string[]]$calls,[Predicate[string]]{ param($line) $line -match '^npm uninstall' })
+            $claude=[array]::FindIndex([string[]]$calls,[Predicate[string]]{ param($line) $line -match '^claude update' })
+            if ($uninstall -lt 0 -or $claude -le $uninstall -or $stdout -notmatch 'RESUMEN DE ACTUALIZACION') { throw 'No continua al fallar limpieza de Claude' }
+        }
         $passed++
         Write-Host "PASS flujo $case / exit $expected / $($calls.Count) invocaciones simuladas"
     }

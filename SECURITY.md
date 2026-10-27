@@ -1,4 +1,4 @@
-# Seguridad y migración a v6.1
+# Seguridad y migración a v6.1.1
 
 La Forja instala software de terceros y configura herramientas en tu cuenta de Windows.
 Ejecutala con doble clic, desde una cuenta sin elevar. Los instaladores de paquetes pueden
@@ -68,6 +68,7 @@ powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\tests\security.tests
 powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\tests\flows.tests.ps1
 pwsh -NoProfile -File .\tests\security.tests.ps1
 pwsh -NoProfile -File .\tests\flows.tests.ps1
+pwsh -NoProfile -File .\tests\native-tools.tests.ps1
 ```
 
 `RemoteSigned` en ese comando afecta solo al proceso de prueba; no modifica políticas persistentes

@@ -1,6 +1,8 @@
 <# : batch portion
 @echo off
 setlocal DisableDelayedExpansion
+rem Windows PowerShell debe reconstruir sus rutas de modulos, sin heredar las de pwsh.
+set "PSModulePath="
 set "FORJA_SCRIPT_PATH=%~f0"
 rem Ruta por entorno: nunca interpolar el nombre del BAT dentro de codigo PowerShell.
 rem El payload se lee en memoria; no hay VBS, PS1 temporal ni elevacion global.
@@ -19,7 +21,7 @@ exit /b %FORJA_EXIT_CODE%
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v6.1"
+$VERSION = "v6.1.1"
 # Ni npm, ni skills, ni conexiones deben heredar privilegios de administrador.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -30,6 +32,7 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
 # Evitar resolucion de herramientas/configuracion desde el directorio descargado.
 Set-Location -LiteralPath (Join-Path $env:SystemRoot 'System32')
 $script:ForjaWorkspaces = @{}
+$script:ForjaWingetInventory = $null
 $ForjaSkillsRevision = 'bd63bedfb8d2244212e2b48595cfa44e994f6a71'
 $AnthropicSkillsRevision = 'dbd4588f9e1033efb41dad4bef2f7947c8993d44'
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
@@ -63,12 +66,82 @@ function Test-FastapiInstalled {
     return $false
 }
 function Test-NpmPkg { param($pkg)
-    try { $o = (npm list -g $pkg --depth=0 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match ([regex]::Escape($pkg) + "@")) { return $true } } catch {}
+    try { $o = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match ([regex]::Escape($pkg) + "@")) { return $true } } catch {}
     return $false
 }
+function Get-ForjaToolPath { param(
+    [ValidateSet('npm','pnpm','claude','netlify','vercel','supabase','snyk')][string]$Name
+)
+    # Especificar extension evita que PowerShell seleccione el shim .ps1 bloqueado.
+    foreach ($extension in @('.exe','.cmd')) {
+        $command = Get-Command ($Name + $extension) -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($command) { return $command.Source }
+    }
+    return $null
+}
+function Invoke-ForjaTool { param([string]$Name)
+    $toolArguments = $args
+    $path = Get-ForjaToolPath $Name
+    if (-not $path) {
+        Write-Warn "$Name no tiene un ejecutable .exe/.cmd disponible. Reinicia la terminal."
+        $global:LASTEXITCODE = -1
+        return
+    }
+    # Un aviso de stderr no es una excepcion PowerShell ni demuestra fallo de instalacion.
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $path @toolArguments 2>&1 | ForEach-Object { $_.ToString() }
+        $code = $LASTEXITCODE
+    } catch {
+        Write-Warn "$Name no pudo ejecutarse ($($_.Exception.GetType().Name)). Se continua con los otros pasos."
+        $code = -1
+    }
+    $global:LASTEXITCODE = $code
+}
+function Get-WingetPackageInfo { param([string]$Id)
+    $info = [pscustomobject]@{ State='error'; Version=$null; Available=$null; ExitCode=-1; Detail='' }
+    try {
+        # El inventario instalado no se filtra por fuente: ese filtro puede ocultar
+        # PowerShell ya instalado. La instalacion/upgrade SI restringe la fuente.
+        $output = (winget list --id $Id --exact --accept-source-agreements --disable-interactivity 2>&1) | Out-String
+        $info.ExitCode = $LASTEXITCODE
+    } catch { $info.Detail='No se pudo ejecutar winget list.'; return $info }
+    $filteredAbsent = ($info.ExitCode -eq -1978335212)
+    if ($filteredAbsent) {
+        # Algunos paquetes (PowerShell incluido) aparecen en la tabla general pero
+        # no en el filtro --id --exact. Verificar su ID visible en un inventario real.
+        if ($null -eq $script:ForjaWingetInventory) {
+            try {
+                $inventory = winget list --accept-source-agreements --disable-interactivity 2>&1 | Out-String
+                $inventoryCode = $LASTEXITCODE
+                $script:ForjaWingetInventory = [pscustomobject]@{ Output=$inventory; ExitCode=$inventoryCode }
+            } catch { $info.Detail='No se pudo consultar el inventario general de WinGet.'; return $info }
+        }
+        $output = $script:ForjaWingetInventory.Output
+        $info.ExitCode = $script:ForjaWingetInventory.ExitCode
+        if ($info.ExitCode -eq -1978335212) { $info.State='absent'; return $info }
+    }
+    if ($info.ExitCode -ne 0) { $info.Detail="winget list devolvio codigo $($info.ExitCode)."; return $info }
+    $output = [regex]::Replace($output, '\x1b\[[0-9;?]*[ -/]*[@-~]', '')
+    # Tabla normal: Nombre (variable), ID exacto, version instalada y opcionalmente
+    # version disponible/fuente. No depende del idioma de los titulos o mensajes.
+    $rows = @([regex]::Matches($output, '(?m)^\s*(?:[^\r\n]*?\s+)?' + [regex]::Escape($Id) + '\s+(?<version>\S+)(?<tail>[^\r\n]*)\r?$'))
+    if ($rows.Count -eq 0 -and $filteredAbsent) { $info.State='absent'; return $info }
+    if ($rows.Count -ne 1) { $info.Detail='El inventario no contiene una unica fila reconocible para ese ID.'; return $info }
+    $info.Version = $rows[0].Groups['version'].Value
+    $tail = $rows[0].Groups['tail'].Value.Trim()
+    if ($tail) {
+        $columns = @($tail -split '\s+')
+        if ($columns.Count -eq 2 -and $columns[1] -eq 'winget') { $info.Available=$columns[0] }
+        elseif ($columns.Count -ne 1 -or $columns[0] -ne 'winget') {
+            $info.Detail='La fila tiene una fuente o formato que requiere revision manual.'; return $info
+        }
+    }
+    $info.State='installed'
+    return $info
+}
 function Test-WingetPkg { param($id)
-    try { $o = (winget list --id $id --exact --source winget --accept-source-agreements 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match [regex]::Escape($id)) { return $true } } catch {}
-    return $false
+    return ((Get-WingetPackageInfo $id).State -eq 'installed')
 }
 function Install-Winget { param($id, $nombre)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -82,7 +155,7 @@ function Install-Winget { param($id, $nombre)
 function Install-Npm { param($pkg, $nombre)
     Write-Info "[INSTALANDO] $nombre via npm..."
     Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-    npm install -g $pkg --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
+    Invoke-ForjaTool npm install -g $pkg --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
     Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
     return ($LASTEXITCODE -eq 0 -and (Test-NpmPkg $pkg))
 }
@@ -203,17 +276,29 @@ function Install-ReviewedSkill { param([string]$Source, [string]$DestinationRoot
     return $true
 }
 function Get-WingetUpdateState { param([string]$Id)
-    $output = (winget list --id $Id --exact --source winget --upgrade-available --accept-source-agreements 2>&1) | Out-String
-    $code = $LASTEXITCODE
-    if ($code -eq -1978335189 -or $code -eq -1978335212) { return 'aldia' }
-    if ($code -ne 0) { return 'error' }
-    if ($output -match ('(?m)(?<!\S)' + [regex]::Escape($Id) + '(?=\s|$)')) { return 'update' }
-    # Un resultado vacio/desconocido con exit 0 NO demuestra estar actualizado.
-    return 'error'
+    $info = Get-WingetPackageInfo $Id
+    if ($info.State -eq 'absent') { return 'missing' }
+    if ($info.State -ne 'installed') { return 'error' }
+    if ($info.Available) { return 'update' }
+    return 'aldia'
+}
+function Remove-ForjaClaudeNpm {
+    try {
+        Invoke-ForjaTool npm uninstall -g '@anthropic-ai/claude-code' 2>&1 | ForEach-Object { Write-Host "  $_" }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Claude Code/npm: desinstalacion fallida (codigo $LASTEXITCODE). Se continua."
+            return 'error'
+        }
+        Write-OK 'Desinstalador npm completado. Se conserva la instalacion nativa.'
+        return 'ok'
+    } catch {
+        Write-Warn "Claude Code/npm: no se pudo iniciar la desinstalacion ($($_.Exception.GetType().Name)). Se continua."
+        return 'error'
+    }
 }
 function Test-SnykAuth {
     # No consultar config get api: devuelve el secreto y no contempla OAuth.
-    $null = & snyk whoami --experimental 2>&1
+    $null = Invoke-ForjaTool snyk whoami --experimental 2>&1
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -307,30 +392,37 @@ if ($modoSel -eq "2") {
     # Pre-chequea si hay update; solo si lo hay corre winget upgrade
     # mostrando su barra de progreso nativa en vivo
     function Invoke-WingetUpdate { param($id, $nombre)
-        $state = Get-WingetUpdateState $id
-        if ($state -eq 'error') { Write-Warn "${nombre}: no se pudo consultar la actualizacion."; return 'error' }
-        if ($state -eq 'aldia') {
-            Write-OK "$nombre ya esta al dia."
-            return "aldia"
+        $info = Get-WingetPackageInfo $id
+        if ($info.State -eq 'absent') { Write-Dim "$nombre no figura en el inventario de WinGet. Saltado."; return 'saltado' }
+        if ($info.State -ne 'installed') { Write-Warn "${nombre}: $($info.Detail)"; return 'error' }
+        if (-not $info.Available) { Write-OK "$nombre ya esta al dia (instalada: $($info.Version))."; return 'aldia' }
+        Write-Info "$nombre : instalada $($info.Version) -> disponible $($info.Available)"
+        try {
+            winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { Write-Host "  $_" }
+            $codigo = $LASTEXITCODE
+        } catch { Write-Warn "${nombre}: no se pudo iniciar la actualizacion."; return 'error' }
+        if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre sin actualizacion aplicable (instalada: $($info.Version))."; return 'aldia' }
+        if ($codigo -eq 0) {
+            $script:ForjaWingetInventory = $null
+            $after = Get-WingetPackageInfo $id
+            if ($after.State -eq 'installed' -and $after.Version -eq $info.Available) {
+                Write-OK "$nombre actualizado. Version instalada: $($after.Version)."; return 'ok'
+            }
+            Write-Warn "$nombre : el instalador termino, pero no se pudo confirmar la version esperada. Volve a verificar."
+            return 'error'
         }
-        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { Write-Host "  $_" }
-        $codigo = $LASTEXITCODE
-        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre ya esta al dia."; return "aldia" }
-        if ($codigo -eq 0) { Write-OK "$nombre actualizado."; return "ok" }
-        Write-Warn "${nombre}: no se pudo actualizar. Si esta abierto, cerralo y reintenta."
-        return "error"
+        Write-Warn "${nombre}: instalador finalizo con codigo $codigo. Se continua con los demas paquetes."
+        return 'error'
     }
 
     # Actualiza un paquete npm global solo si la version instalada
     # difiere de la ultima publicada (evita reinstalaciones de minutos)
     function Invoke-NpmUpdate { param($pkg, $nombre)
         $vLocal = $null
-        $lista = (npm list -g $pkg --depth=0 2>&1) | Out-String
+        $lista = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String
         if ($LASTEXITCODE -ne 0) { Write-Warn "${nombre}: fallo la consulta local de npm."; return 'error' }
         if ($lista -match ([regex]::Escape($pkg) + "@(\S+)")) { $vLocal = $Matches[1] }
-        $vUltima = ((npm view $pkg version 2>&1) | Out-String).Trim()
+        $vUltima = ((Invoke-ForjaTool npm view $pkg version 2>&1) | Out-String).Trim()
         if ($LASTEXITCODE -ne 0 -or $vUltima -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') {
             Write-Warn "${nombre}: no se pudo consultar una version valida del registro."; return 'error'
         }
@@ -339,10 +431,16 @@ if ($modoSel -eq "2") {
             return "aldia"
         }
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        npm install -g "$pkg@$vUltima" 2>&1 | ForEach-Object { Write-Host "  $_" }
+        Invoke-ForjaTool npm install -g "$pkg@$vUltima" 2>&1 | ForEach-Object { Write-Host "  $_" }
         $codigo = $LASTEXITCODE
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        if ($codigo -eq 0) { Write-OK "$nombre actualizado a la ultima version."; return "ok" }
+        if ($codigo -eq 0) {
+            $after = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String
+            if ($LASTEXITCODE -eq 0 -and $after -match ([regex]::Escape($pkg) + '@(\S+)') -and $Matches[1] -eq $vUltima) {
+                Write-OK "$nombre actualizado. Version instalada: $vUltima."; return 'ok'
+            }
+            Write-Warn "${nombre}: npm termino pero no se confirmo la version esperada."; return 'error'
+        }
         Write-Warn "${nombre}: error al actualizar."
         return "error"
     }
@@ -351,14 +449,13 @@ if ($modoSel -eq "2") {
             "ok"    { $script:updOK++ }
             "aldia" { $script:updAlDia++ }
             "error" { $script:updError++ }
+            "saltado" { $script:updSaltado++ }
         }
     }
 
     # El lanzador usa Windows PowerShell 5.1, por lo que pwsh no queda bloqueado.
     Write-Info 'PowerShell 7...'
-    if (Test-WingetPkg 'Microsoft.PowerShell') {
-        Add-UpdResultado (Invoke-WingetUpdate 'Microsoft.PowerShell' 'PowerShell 7')
-    } else { Write-Dim 'PowerShell 7 no instalado via winget. Saltado.'; $updSaltado++ }
+    Add-UpdResultado (Invoke-WingetUpdate 'Microsoft.PowerShell' 'PowerShell 7')
     Write-Host ''
 
     # --- Herramientas winget ---
@@ -377,12 +474,7 @@ if ($modoSel -eq "2") {
     foreach ($tool in $wingetTools) {
         $id = $tool[0]; $nombre = $tool[1]
         Write-Info "$nombre..."
-        if (Test-WingetPkg $id) {
-            Add-UpdResultado (Invoke-WingetUpdate $id $nombre)
-        } else {
-            Write-Dim "$nombre no esta instalado. Saltado."
-            $updSaltado++
-        }
+        Add-UpdResultado (Invoke-WingetUpdate $id $nombre)
         Write-Host ""
     }
 
@@ -453,7 +545,7 @@ if ($modoSel -eq "2") {
     # Deteccion de doble instalacion (npm global + nativa). Tener las dos
     # confunde al PATH y al updater; Anthropic recomienda la nativa.
     $claudeNpm    = (Test-Path "$env:APPDATA\npm\claude*") -or (Test-Path "$env:APPDATA\npm\node_modules\@anthropic-ai\claude-code")
-    $claudeNativo = (Test-Path "$env:USERPROFILE\.local\bin\claude.exe") -or (Test-Path "$env:USERPROFILE\.local\share\claude")
+    $claudeNativo = Test-Path -LiteralPath "$env:USERPROFILE\.local\bin\claude.exe" -PathType Leaf
     if ($claudeNpm -and $claudeNativo) {
         Write-Warn "Se detectaron DOS instalaciones de Claude Code:"
         Write-Host "    - npm global  (AppData\Roaming\npm)" -ForegroundColor White
@@ -465,13 +557,8 @@ if ($modoSel -eq "2") {
         if (Ask-SN "Eliminar la instalacion npm y quedarte solo con la nativa?") {
             Write-Host ""
             Write-Info "Eliminando instalacion npm de Claude Code..."
-            npm uninstall -g "@anthropic-ai/claude-code" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warn 'npm no pudo desinstalar Claude Code; no se borraron archivos manualmente.'
-                $updError++
-            } else {
-                Write-OK 'Desinstalador npm completado. Verifica claude --version en una terminal nueva.'
-            }
+            $cleanResult = Remove-ForjaClaudeNpm
+            if ($cleanResult -eq 'error') { $updError++ }
             Write-Host ""
         } else {
             Write-Dim "Se mantienen las dos instalaciones."
@@ -481,11 +568,14 @@ if ($modoSel -eq "2") {
 
     if (Get-Command claude -ErrorAction SilentlyContinue) {
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        claude update
+        Invoke-ForjaTool claude update
         $codigo = $LASTEXITCODE
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        if ($codigo -eq 0) { Write-OK "Claude Code CLI al dia."; $updOK++ }
-        else { Write-Warn "Claude Code CLI: proba 'claude update' en una terminal nueva."; $updError++ }
+        if ($codigo -eq 0) {
+            $versionClaude = (Invoke-ForjaTool claude --version 2>&1) | Out-String
+            if ($LASTEXITCODE -eq 0 -and $versionClaude -match '\d+\.\d+\.\d+') { Write-OK "Claude Code CLI: version $($versionClaude.Trim())."; $updOK++ }
+            else { Write-Warn 'Claude Code CLI: el updater termino, pero no se pudo verificar la version.'; $updError++ }
+        } else { Write-Warn "Claude Code CLI: proba 'claude update' en una terminal nueva."; $updError++ }
     } else {
         Write-Dim "Claude Code CLI no esta instalado. Saltado."
         $updSaltado++
@@ -727,7 +817,7 @@ Write-Info "Verificando..."
 Write-Host ""
 
 if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-    $pnpmv = (pnpm --version 2>&1) | Out-String
+    $pnpmv = (Invoke-ForjaTool pnpm --version 2>&1) | Out-String
     Write-OK "pnpm ($($pnpmv.Trim()))."
     $status["pnpm"] = "OK"
 } else {
@@ -739,7 +829,7 @@ if (Get-Command pnpm -ErrorAction SilentlyContinue) {
         $nm = Get-Command npm -ErrorAction SilentlyContinue
         if ($nm) {
             Write-Info "[INSTALANDO] pnpm via npm..."
-            npm install -g pnpm 2>&1 | Out-Null
+            Invoke-ForjaTool npm install -g pnpm 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0 -and (Get-Command pnpm -ErrorAction SilentlyContinue)) { Write-OK "Instalado via npm."; $status["pnpm"] = "OK" }
             else { Write-Err "Error."; $status["pnpm"] = "ERROR" }
         } else {
@@ -860,7 +950,7 @@ if (-not $nm) {
     } else {
         Write-Info "[INSTALANDO] Claude Code (puede tardar 3-8 min)..."
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        npm install -g @anthropic-ai/claude-code --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
+        Invoke-ForjaTool npm install -g @anthropic-ai/claude-code --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         $env:PATH = "$env:PATH;$env:APPDATA\npm"
         if ($LASTEXITCODE -eq 0 -and (Get-Command claude -ErrorAction SilentlyContinue)) {
@@ -878,7 +968,7 @@ if (-not $nm) {
         Write-Info "Verificando instalacion..."
         # claude doctor es interactivo (TUI): no sirve en un script desatendido
         try {
-            $cv = (claude --version 2>&1) | Out-String
+            $cv = (Invoke-ForjaTool claude --version 2>&1) | Out-String
             if ($cv -match "\d+\.\d+") { Write-OK "Claude Code responde ($($cv.Trim()))." }
             else { Write-Warn "Instalado pero no responde. Corre 'claude doctor' en una terminal nueva." }
         } catch {
@@ -1104,7 +1194,7 @@ Write-Info "Verificando..."
 Write-Host ""
 
 if (Get-Command supabase -ErrorAction SilentlyContinue) {
-    $sbv = (supabase --version 2>&1) | Out-String
+    $sbv = (Invoke-ForjaTool supabase --version 2>&1) | Out-String
     Write-OK "Supabase CLI ($($sbv.Trim()))."
     $status["supabase"] = "OK"
 } else {
@@ -1116,7 +1206,7 @@ if (Get-Command supabase -ErrorAction SilentlyContinue) {
         $nm = Get-Command npm -ErrorAction SilentlyContinue
         if ($nm) {
             Write-Info "[INSTALANDO] Supabase CLI via npm (fallback)..."
-            npm install -g supabase 2>&1 | Out-Null
+            Invoke-ForjaTool npm install -g supabase 2>&1 | Out-Null
             if (Get-Command supabase -ErrorAction SilentlyContinue) {
                 Write-OK "Instalado via npm."
                 $status["supabase"] = "OK"
@@ -1337,7 +1427,7 @@ Write-Host ""
 Write-Separador
 Write-Info "Netlify..."
 try {
-    $ns = (netlify status 2>&1) | Out-String
+    $ns = (Invoke-ForjaTool netlify status 2>&1) | Out-String
     if ($LASTEXITCODE -eq 0 -and $ns -match "Logged in|Email:") { Write-OK "Netlify: Conectado"; $conexiones["Netlify"] = "OK" } else { throw }
 } catch {
     Write-Warn "Netlify: No conectado"
@@ -1348,9 +1438,9 @@ try {
         Write-Host ""
         if (Ask-SN "Conectar Netlify ahora? (se abre el navegador)") {
             Write-Host ""
-            netlify login
+            Invoke-ForjaTool netlify login
             try {
-                $nc = (netlify status 2>&1) | Out-String
+                $nc = (Invoke-ForjaTool netlify status 2>&1) | Out-String
                 if ($LASTEXITCODE -eq 0 -and $nc -match "Logged in|Email:") { Write-OK "Netlify conectado!"; $conexiones["Netlify"] = "OK" }
             } catch {}
         }
@@ -1362,7 +1452,7 @@ Write-Host ""
 Write-Separador
 Write-Info "Vercel..."
 try {
-    $vs = (vercel whoami 2>&1) | Out-String
+    $vs = (Invoke-ForjaTool vercel whoami 2>&1) | Out-String
     if ($LASTEXITCODE -eq 0 -and $vs -match "\w" -and $vs -notmatch "Error|not logged|No user") {
         Write-OK "Vercel: Conectado como $($vs.Trim())"
         $conexiones["Vercel"] = "OK"
@@ -1376,9 +1466,9 @@ try {
         Write-Host ""
         if (Ask-SN "Conectar Vercel ahora?") {
             Write-Host ""
-            vercel login
+            Invoke-ForjaTool vercel login
             try {
-                $vc = (vercel whoami 2>&1) | Out-String
+                $vc = (Invoke-ForjaTool vercel whoami 2>&1) | Out-String
                 if ($LASTEXITCODE -eq 0 -and $vc -match "\w" -and $vc -notmatch "Error") { Write-OK "Vercel conectado!"; $conexiones["Vercel"] = "OK" }
             } catch {}
         }
@@ -1390,7 +1480,7 @@ Write-Host ""
 Write-Separador
 Write-Info "Supabase..."
 try {
-    $ss = (supabase projects list 2>&1) | Out-String
+    $ss = (Invoke-ForjaTool supabase projects list 2>&1) | Out-String
     if ($LASTEXITCODE -eq 0 -and $ss -match "Name|ID" -and $ss -notmatch "error|not logged") {
         Write-OK "Supabase: Conectado"
         $conexiones["Supabase"] = "OK"
@@ -1404,9 +1494,9 @@ try {
         Write-Host ""
         if (Ask-SN "Conectar Supabase ahora? (se abre el navegador)") {
             Write-Host ""
-            supabase login
+            Invoke-ForjaTool supabase login
             try {
-                $sc = (supabase projects list 2>&1) | Out-String
+                $sc = (Invoke-ForjaTool supabase projects list 2>&1) | Out-String
                 if ($LASTEXITCODE -eq 0 -and $sc -match "Name|ID") { Write-OK "Supabase conectado!"; $conexiones["Supabase"] = "OK" }
             } catch {}
         }
@@ -1421,7 +1511,7 @@ $conexiones['Snyk'] = 'PENDIENTE'
 if (Get-Command snyk -ErrorAction SilentlyContinue) {
     if (Test-SnykAuth) { Write-OK 'Snyk: conectado'; $conexiones['Snyk'] = 'OK' }
     elseif (Ask-SN 'Conectar Snyk por navegador (OAuth)?') {
-        snyk auth
+        Invoke-ForjaTool snyk auth
         if ($LASTEXITCODE -eq 0 -and (Test-SnykAuth)) {
             Write-OK 'Snyk conectado!'; $conexiones['Snyk'] = 'OK'
         } else { Write-Warn 'No se pudo verificar Snyk. Revisa snyk auth en una terminal nueva.' }
