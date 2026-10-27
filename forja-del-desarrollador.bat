@@ -21,7 +21,7 @@ exit /b %FORJA_EXIT_CODE%
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v6.1.1"
+$VERSION = "v6.1.3"
 # Ni npm, ni skills, ni conexiones deben heredar privilegios de administrador.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -33,7 +33,7 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
 Set-Location -LiteralPath (Join-Path $env:SystemRoot 'System32')
 $script:ForjaWorkspaces = @{}
 $script:ForjaWingetInventory = $null
-$ForjaSkillsRevision = '83856c28601af0c07eae5958b36b08dfe85c09e1'
+$ForjaSkillsRevision = '2bd31daa7d7334cebbe561d2fbe43bd1fa07b9ce'
 $AnthropicSkillsRevision = 'dbd4588f9e1033efb41dad4bef2f7947c8993d44'
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
@@ -193,9 +193,15 @@ function Get-ForjaTree { param([string]$Root)
         }
     }
 }
-function New-ForjaWorkspace {
-    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible.' }
-    $base = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Forja\Staging'))
+function New-ForjaWorkspace { param([switch]$Installer)
+    if ($Installer) {
+        if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) { throw 'USERPROFILE no disponible.' }
+        # Documentos evita la redireccion de AppData al ejecutar un MSI elevado.
+        $base = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE 'Documents\Forja\Staging'))
+    } else {
+        if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible.' }
+        $base = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Forja\Staging'))
+    }
     Assert-NoReparsePath $base
     [IO.Directory]::CreateDirectory($base) | Out-Null
     $path = Join-Path $base ([guid]::NewGuid().ToString('N'))
@@ -302,6 +308,208 @@ function Test-SnykAuth {
     return ($LASTEXITCODE -eq 0)
 }
 
+
+function Test-NpmRuntime { param([string]$Package,[string]$Version)
+    $commands=@{ 'netlify-cli'='netlify'; 'vercel'='vercel'; 'snyk'='snyk'; 'supabase'='supabase'; '@anthropic-ai/claude-code'='claude'; 'pnpm'='pnpm' }
+    if (-not $commands.ContainsKey($Package)) { return $true }
+    $output=Invoke-ForjaTool $commands[$Package] --version 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { return $false }
+    return ($output -match ('(?<![0-9.])'+[regex]::Escape($Version)+'(?![0-9.])'))
+}
+function Test-MongoshBusy {
+    return (@(Get-Process -Name mongosh -ErrorAction SilentlyContinue).Count -gt 0)
+}
+function Get-MongoshPreviousFailure { param([string]$Version)
+    try {
+        $root=Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+        Assert-NoReparsePath $root
+        if (-not (Test-Path -LiteralPath $root)) { return $null }
+        $prefix="MongoDB.Shell.$Version-"
+        $log=Get-ChildItem -LiteralPath $root -Filter 'MongoDB.Shell*.log' -File -ErrorAction Stop |
+            Where-Object { $_.Name.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase) } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($log) {
+            Assert-NoReparsePath $log.FullName
+            if ((Get-Content -LiteralPath $log.FullName -Raw -ErrorAction Stop) -match '(?i)Error 1304') { return $log.FullName }
+        }
+    } catch { Write-Dim 'No se pudo consultar el ultimo log de mongosh.' }
+    return $null
+}
+
+function Get-MongoshRepairPackage { param([string]$Version)
+    # Version y huella verificadas contra el manifiesto oficial de WinGet.
+    # Una version futura requiere una nueva revision del catalogo de reparacion.
+    if ($Version -ne '2.14.0') { return $null }
+    return [pscustomobject]@{
+        Version='2.14.0'
+        Uri='https://downloads.mongodb.com/compass/mongosh-2.14.0-x64.msi'
+        Sha256='0C433D1C06D0A8377997DA39775C537B0C9A4AD639DCDEA7EDF8B594872516C1'
+    }
+}
+function Test-ForjaRepairAccount {
+    # WindowsIdentity.Groups omite grupos deny-only en algunos tokens UAC.
+    # whoami conserva esos SID; no depende del nombre traducido del grupo.
+    try {
+        $whoami=Join-Path ([Environment]::SystemDirectory) 'whoami.exe'
+        $groups=& $whoami /groups /fo csv /nh 2>$null | Out-String
+        if ($LASTEXITCODE -ne 0) { return $false }
+        return (Test-ForjaAdminGroupList $groups)
+    } catch { return $false }
+}
+function Test-ForjaAdminGroupList { param([string]$Csv)
+    $rows=$Csv | ConvertFrom-Csv -Header Name,Type,Sid,Attributes -ErrorAction Stop
+    return (@($rows | Where-Object { $_.Sid -eq 'S-1-5-32-544' }).Count -gt 0)
+}
+function Save-ForjaRepairPackage { param([string]$Uri,[string]$Destination)
+    if ($Uri -ne 'https://downloads.mongodb.com/compass/mongosh-2.14.0-x64.msi') { throw 'Origen de reparacion no permitido.' }
+    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 120 -ErrorAction Stop | Out-Null
+}
+function Test-MongoshRuntime { param([string]$Version)
+    $command=Get-Command mongosh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) { return $false }
+    $output=& $command.Source --norc --version 2>&1 | Out-String
+    return ($LASTEXITCODE -eq 0 -and $output.Trim() -eq $Version)
+}
+function Invoke-MongoshRepair { param([string]$Version)
+    $package=Get-MongoshRepairPackage $Version
+    if (-not $package) { Write-Warn 'Esta version no tiene un MSI de reparacion revisado. Se deja pendiente.'; return 'pendiente' }
+    if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+        Write-Warn 'El MSI revisado es para Windows x64. Se deja pendiente.'; return 'pendiente'
+    }
+    if (-not (Test-ForjaRepairAccount)) { Write-Warn 'La reparacion requiere UAC de la misma cuenta administradora. Se deja pendiente.'; return 'pendiente' }
+    if (Test-MongoshBusy) { Write-Warn 'Cerra mongosh antes de reparar.'; return 'pendiente' }
+    $workspace=$null; $stream=$null; $verified=$false; $trusted=$false
+    try {
+        $workspace=New-ForjaWorkspace -Installer
+        $msi=Join-Path $workspace 'mongosh-2.14.0-x64.msi'
+        $log=Join-Path $workspace 'repair.log'
+        Write-Info 'Descargando el MSI oficial de MongoDB Shell para verificarlo...'
+        Save-ForjaRepairPackage $package.Uri $msi
+        Assert-NoReparsePath $msi
+        # Mantener el archivo bloqueado contra escritura/reemplazo desde el hash
+        # hasta que termine Windows Installer, inclusive durante el dialogo UAC.
+        $stream=[IO.File]::Open($msi,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        $hash=(Get-FileHash -InputStream $stream -Algorithm SHA256 -ErrorAction Stop).Hash
+        if ($hash -cne $package.Sha256) { throw 'La huella SHA-256 no coincide. No se ejecuta el MSI.' }
+        $signature=Get-AuthenticodeSignature -LiteralPath $msi -ErrorAction Stop
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?i)\bMongoDB\b') {
+            throw 'No se pudo validar la firma de MongoDB. No se ejecuta el MSI.'
+        }
+        $trusted=$true
+        $installer=Join-Path ([Environment]::SystemDirectory) 'msiexec.exe'
+        Write-Info "MSI $Version verificado. UAC eleva solo Windows Installer; la Forja sigue sin elevar."
+        $arguments=@('/i',('"'+$msi+'"'),'/passive','/norestart','/L*v',('"'+$log+'"'))
+        $process=Start-Process -FilePath $installer -ArgumentList $arguments -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        if ($process.ExitCode -eq 3010) { Write-Warn 'MSI completado; requiere reiniciar y verificar. No se reinicia automaticamente.'; return 'pendiente' }
+        if ($process.ExitCode -ne 0) { Write-Warn "La reparacion MSI fallo con codigo $($process.ExitCode). Log: $log"; return 'error' }
+        $script:ForjaWingetInventory=$null
+        $after=Get-WingetPackageInfo 'MongoDB.Shell'
+        if ($after.State -ne 'installed' -or $after.Version -ne $Version) {
+            Write-Warn "MSI completado pero falta confirmar la version $Version en WinGet. Log: $log"; return 'pendiente'
+        }
+        Write-Info 'Verificando mongosh sin cargar scripts de inicio ni conectar a una base...'
+        if (-not (Test-MongoshRuntime $Version)) { Write-Warn 'La version de mongosh no se pudo confirmar en esta terminal. Se deja pendiente.'; return 'pendiente' }
+        $verified=$true
+        Write-OK "mongosh reparado y version instalada confirmada: $Version."
+        return 'ok'
+    } catch [ComponentModel.Win32Exception] {
+        if ($_.Exception.NativeErrorCode -eq 1223) { Write-Warn 'Reparacion cancelada en UAC. Se deja pendiente.'; return 'pendiente' }
+        Write-Warn 'No se pudo iniciar Windows Installer. La reparacion queda pendiente.'; return 'pendiente'
+    } catch { Write-Warn "Reparacion de mongosh: $($_.Exception.Message)"; return 'error' }
+    finally {
+        if ($stream) { $stream.Dispose() }
+        if ($workspace) {
+            if ($verified -or -not $trusted) {
+                try { Remove-ForjaWorkspace $workspace } catch { Write-Dim "Temporal retenido: $workspace" }
+            } else { Write-Dim "Archivos de diagnostico conservados: $workspace" }
+        }
+    }
+}
+
+function Get-InstallerFailureDetail { param([string]$Output)
+    $detail=''
+    if ($Output -match '(?i)exit code:\s*(\d+)') { $detail="Instalador: codigo $($Matches[1])." }
+    # Leer exclusivamente logs MSI de WinGet bajo su directorio oficial.
+    if ($Output -match '(?im)Installer log is available at:\s*([^\r\n]+\.log)\s*$') {
+        $log=$Matches[1].Trim()
+        $base=Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+        try {
+            $full=[IO.Path]::GetFullPath($log)
+            if ($full.StartsWith([IO.Path]::GetFullPath($base)+'\',[StringComparison]::OrdinalIgnoreCase)) {
+                Assert-NoReparsePath $full
+                if (Test-Path -LiteralPath $full -PathType Leaf) {
+                    $text=Get-Content -LiteralPath $full -Raw -ErrorAction Stop
+                    if ($text -match '(?i)Error 1304') { $detail+=' MSI 1304: no se pudo escribir un archivo de la instalacion. Cerra mongosh y revisa el instalador; no se cambian permisos automaticamente.' }
+                    $detail+=" Log: $full"
+                }
+            }
+        } catch { $detail+=' No se pudo leer el log MSI.' }
+    }
+    return $detail.Trim()
+}
+function Invoke-ForjaPython { param([string]$Executable)
+    $pythonArguments=$args
+    $ErrorActionPreference='Continue'
+    try { & $Executable @pythonArguments 2>&1 | ForEach-Object { $_.ToString() }; $code=$LASTEXITCODE }
+    catch { Write-Warn "No se pudo ejecutar Python ($($_.Exception.GetType().Name))."; $code=-1 }
+    $global:LASTEXITCODE=$code
+}
+function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShared)
+    $result=[pscustomobject]@{ State='error'; SharedConflict=$false; Environment=$null }
+    $base=Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $base) { Write-Warn 'Python no disponible.'; $result.State='saltado'; return $result }
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { Write-Warn 'LOCALAPPDATA no disponible.'; return $result }
+    $expectedVenv=Join-Path $env:LOCALAPPDATA 'Forja\Python\venv'
+    if ($CheckShared -or -not (Test-Path -LiteralPath $expectedVenv)) {
+        $shared=Invoke-ForjaPython $base.Source -m pip check 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            $result.SharedConflict=$true
+            Write-Warn 'El Python compartido tiene dependencias incompatibles o no pudo verificarse. La Forja no lo modifica.'
+            $shared.Trim() -split '\r?\n' | Select-Object -First 8 | ForEach-Object { Write-Dim $_ }
+        }
+    }
+    try {
+        if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible' }
+        $venv=Join-Path $env:LOCALAPPDATA 'Forja\Python\venv'
+        $result.Environment=$venv
+        Assert-NoReparsePath $venv
+        $python=Join-Path $venv 'Scripts\python.exe'
+        $config=Join-Path $venv 'pyvenv.cfg'
+        if (-not (Test-Path -LiteralPath $venv)) {
+            Write-Info "Las librerias se instalan en un entorno aislado: $venv"
+            if (-not (Ask-SN 'Crear el entorno Python de la Forja sin modificar el compartido?')) { $result.State='saltado'; return $result }
+            Invoke-ForjaPython $base.Source -m venv $venv 2>&1 | ForEach-Object { Write-Host "  $_" }
+            if ($LASTEXITCODE -ne 0) { throw 'No se pudo crear el entorno' }
+        }
+        Assert-NoReparsePath $python
+        if (-not (Test-Path -LiteralPath $python -PathType Leaf) -or -not (Test-Path -LiteralPath $config -PathType Leaf)) { throw 'El entorno esta incompleto; no se reemplaza automaticamente' }
+        $configuration=Get-Content -LiteralPath $config -Raw -ErrorAction Stop
+        if ($configuration -notmatch '(?im)^include-system-site-packages\s*=\s*false\s*$') { throw 'El entorno no esta aislado del Python compartido' }
+        $before=Invoke-ForjaPython $python -m pip list --format=json --disable-pip-version-check 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw 'No se pudo inventariar el entorno' }
+        $null=$before | ConvertFrom-Json -ErrorAction Stop
+        $installArguments=@('-m','pip','install','--disable-pip-version-check')
+        if ($Update) { $installArguments+='--upgrade' }
+        $installArguments+=@('fastapi','uvicorn[standard]','python-multipart','pdfplumber','requests')
+        Invoke-ForjaPython $python @installArguments 2>&1 | ForEach-Object { Write-Host "  $_" }
+        if ($LASTEXITCODE -ne 0) { throw 'pip no pudo instalar las librerias' }
+        $check=Invoke-ForjaPython $python -m pip check 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { Write-Warn $check.Trim(); throw 'Las dependencias del entorno no son compatibles' }
+        $null=Invoke-ForjaPython $python -m pip show fastapi uvicorn python-multipart pdfplumber requests 2>&1
+        if ($LASTEXITCODE -ne 0) { throw 'Faltan librerias requeridas' }
+        $after=Invoke-ForjaPython $python -m pip list --format=json --disable-pip-version-check 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw 'No se pudo verificar la version instalada' }
+        $null=$after | ConvertFrom-Json -ErrorAction Stop
+        $imports=Invoke-ForjaPython $python -c 'import fastapi, uvicorn, multipart, pdfplumber, requests' 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { Write-Warn $imports.Trim(); throw 'Las librerias no se pueden cargar en ese interprete' }
+        $result.State='ok'
+        if ($before.Trim() -eq $after.Trim()) { $result.State='aldia' }
+        Write-OK "Librerias Python verificadas en el entorno de la Forja: $python"
+        Write-Dim "Para usarlas, ejecuta ese Python directamente; no hace falta activar scripts de PowerShell."
+    } catch { Write-Warn "Librerias Python: $($_.Exception.Message)."; $result.State='error' }
+    return $result
+}
+
 $T = 22
 $status = @{}
 $necesitaReabrir = $false
@@ -382,7 +590,7 @@ if ($modoSel -eq "2") {
     Write-Section "============================================================"
     Write-Host ""
 
-    $updOK = 0; $updAlDia = 0; $updSaltado = 0; $updError = 0
+    $script:updOK = 0; $script:updAlDia = 0; $script:updSaltado = 0; $script:updError = 0; $script:updPendiente = 0; $script:updAvisos = 0
     $env:PATH = "$env:PATH;$env:ProgramFiles\nodejs;$env:APPDATA\npm;$env:USERPROFILE\.local\bin"
 
     # winget devuelve 0x8A15002B (-1978335189) cuando NO hay update aplicable;
@@ -397,8 +605,22 @@ if ($modoSel -eq "2") {
         if ($info.State -ne 'installed') { Write-Warn "${nombre}: $($info.Detail)"; return 'error' }
         if (-not $info.Available) { Write-OK "$nombre ya esta al dia (instalada: $($info.Version))."; return 'aldia' }
         Write-Info "$nombre : instalada $($info.Version) -> disponible $($info.Available)"
+        if ($id -eq 'MongoDB.Shell' -and (Test-MongoshBusy)) {
+            Write-Warn 'mongosh esta abierto. Cerra sus sesiones y volve a actualizarlo; no se cierran procesos automaticamente.'
+            return 'pendiente'
+        }
+        if ($id -eq 'MongoDB.Shell') {
+            $previousFailure=Get-MongoshPreviousFailure $info.Available
+            if ($previousFailure) {
+                Write-Warn "El ultimo intento de esta version fallo con MSI 1304 al escribir archivos. Log: $previousFailure"
+                Write-Info 'La reparacion usa solo el MSI oficial con SHA-256 y firma verificados. Puede pedir UAC para ese paquete.'
+                if (Ask-SN 'Reparar mongosh con Windows Installer y permisos para este paso?') { return (Invoke-MongoshRepair $info.Available) }
+                return 'pendiente'
+            }
+        }
+        $installerOutput=New-Object 'System.Collections.Generic.List[string]'
         try {
-            winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { Write-Host "  $_" }
+            winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { $installerOutput.Add($_.ToString()); Write-Host "  $_" }
             $codigo = $LASTEXITCODE
         } catch { Write-Warn "${nombre}: no se pudo iniciar la actualizacion."; return 'error' }
         if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre sin actualizacion aplicable (instalada: $($info.Version))."; return 'aldia' }
@@ -411,7 +633,12 @@ if ($modoSel -eq "2") {
             Write-Warn "$nombre : el instalador termino, pero no se pudo confirmar la version esperada. Volve a verificar."
             return 'error'
         }
-        Write-Warn "${nombre}: instalador finalizo con codigo $codigo. Se continua con los demas paquetes."
+        $detail=Get-InstallerFailureDetail ($installerOutput -join "`n")
+        Write-Warn "${nombre}: fallo WinGet $codigo. $detail"
+        if ($id -eq 'MongoDB.Shell' -and $detail -match 'MSI 1304') {
+            if (Ask-SN 'Intentar reparacion con el MSI oficial verificado y UAC solo para este paquete?') { return (Invoke-MongoshRepair $info.Available) }
+            return 'pendiente'
+        }
         return 'error'
     }
 
@@ -427,17 +654,25 @@ if ($modoSel -eq "2") {
             Write-Warn "${nombre}: no se pudo consultar una version valida del registro."; return 'error'
         }
         if ($vLocal -and $vUltima -and $vLocal -eq $vUltima) {
+            if (-not (Test-NpmRuntime $pkg $vLocal)) { Write-Warn "${nombre}: la version figura instalada pero el comando no responde correctamente."; return 'error' }
             Write-OK "$nombre ya esta al dia ($vLocal)."
             return "aldia"
         }
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        Invoke-ForjaTool npm install -g "$pkg@$vUltima" 2>&1 | ForEach-Object { Write-Host "  $_" }
+        $npmOutput=New-Object 'System.Collections.Generic.List[string]'
+        Invoke-ForjaTool npm install -g "$pkg@$vUltima" 2>&1 | ForEach-Object { $npmOutput.Add($_.ToString()); Write-Host "  $_" }
         $codigo = $LASTEXITCODE
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         if ($codigo -eq 0) {
             $after = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String
             if ($LASTEXITCODE -eq 0 -and $after -match ([regex]::Escape($pkg) + '@(\S+)') -and $Matches[1] -eq $vUltima) {
-                Write-OK "$nombre actualizado. Version instalada: $vUltima."; return 'ok'
+                if (-not (Test-NpmRuntime $pkg $vUltima)) { Write-Warn "${nombre}: paquete actualizado pero la CLI no responde con esa version."; return 'error' }
+                Write-OK "$nombre actualizado y comando verificado. Version instalada: $vUltima."
+                if (($npmOutput -join "`n") -match '(?im)^npm warn') {
+                    Write-Warn 'npm emitio avisos del proveedor. La CLI responde; revisa esos avisos. No se cambia la politica de scripts.'
+                    return 'ok-aviso'
+                }
+                return 'ok'
             }
             Write-Warn "${nombre}: npm termino pero no se confirmo la version esperada."; return 'error'
         }
@@ -450,6 +685,9 @@ if ($modoSel -eq "2") {
             "aldia" { $script:updAlDia++ }
             "error" { $script:updError++ }
             "saltado" { $script:updSaltado++ }
+            "pendiente" { $script:updPendiente++ }
+            "ok-aviso" { $script:updOK++; $script:updAvisos++ }
+            "aviso" { $script:updAvisos++ }
         }
     }
 
@@ -488,7 +726,7 @@ if ($modoSel -eq "2") {
         Add-UpdResultado (Invoke-WingetUpdate $pyId "Python")
     } else {
         Write-Dim "Python no esta instalado via winget. Saltado."
-        $updSaltado++
+        $script:updSaltado++
     }
     Write-Host ""
 
@@ -501,11 +739,11 @@ if ($modoSel -eq "2") {
             Add-UpdResultado (Invoke-NpmUpdate "supabase" "Supabase CLI")
         } else {
             Write-Warn "Supabase CLI instalado por otro medio: actualizalo manualmente."
-            $updError++
+            $script:updError++
         }
     } else {
         Write-Dim "Supabase CLI no esta instalado. Saltado."
-        $updSaltado++
+        $script:updSaltado++
     }
     Write-Host ""
 
@@ -527,15 +765,15 @@ if ($modoSel -eq "2") {
         if ($codigo -eq 0) {
             # wsl --update devuelve 0 haya o no update: contarlo como "al dia"
             Write-OK "WSL al dia (se actualiza solo si hay version nueva)."
-            $updAlDia++
+            $script:updAlDia++
         } else {
             Write-Warn "WSL: la actualizacion fallo por ambas vias. Reintenta mas tarde"
             Write-Warn "o corre manualmente: wsl --update --web-download"
-            $updError++
+            $script:updError++
         }
     } else {
         Write-Dim "WSL no esta instalado. Saltado."
-        $updSaltado++
+        $script:updSaltado++
     }
     Write-Host ""
 
@@ -558,7 +796,7 @@ if ($modoSel -eq "2") {
             Write-Host ""
             Write-Info "Eliminando instalacion npm de Claude Code..."
             $cleanResult = Remove-ForjaClaudeNpm
-            if ($cleanResult -eq 'error') { $updError++ }
+            if ($cleanResult -eq 'error') { $script:updError++ }
             Write-Host ""
         } else {
             Write-Dim "Se mantienen las dos instalaciones."
@@ -567,18 +805,25 @@ if ($modoSel -eq "2") {
     }
 
     if (Get-Command claude -ErrorAction SilentlyContinue) {
+        $claudeBefore=$null
+        $beforeOutput=Invoke-ForjaTool claude --version 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $beforeOutput -match '\d+\.\d+\.\d+') { $claudeBefore=$Matches[0] }
         Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
         Invoke-ForjaTool claude update
         $codigo = $LASTEXITCODE
         Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
         if ($codigo -eq 0) {
             $versionClaude = (Invoke-ForjaTool claude --version 2>&1) | Out-String
-            if ($LASTEXITCODE -eq 0 -and $versionClaude -match '\d+\.\d+\.\d+') { Write-OK "Claude Code CLI: version $($versionClaude.Trim())."; $updOK++ }
-            else { Write-Warn 'Claude Code CLI: el updater termino, pero no se pudo verificar la version.'; $updError++ }
-        } else { Write-Warn "Claude Code CLI: proba 'claude update' en una terminal nueva."; $updError++ }
+            if ($LASTEXITCODE -eq 0 -and $versionClaude -match '\d+\.\d+\.\d+') {
+                $claudeAfter=$Matches[0]
+                Write-OK "Claude Code CLI: version $($versionClaude.Trim())."
+                if ($claudeBefore -eq $claudeAfter) { $script:updAlDia++ } else { $script:updOK++ }
+            }
+            else { Write-Warn 'Claude Code CLI: el updater termino, pero no se pudo verificar la version.'; $script:updError++ }
+        } else { Write-Warn "Claude Code CLI: proba 'claude update' en una terminal nueva."; $script:updError++ }
     } else {
         Write-Dim "Claude Code CLI no esta instalado. Saltado."
-        $updSaltado++
+        $script:updSaltado++
     }
     Write-Host ""
 
@@ -596,7 +841,7 @@ if ($modoSel -eq "2") {
                 Add-UpdResultado (Invoke-NpmUpdate $pkg $nombre)
             } else {
                 Write-Dim "$nombre no esta instalado. Saltado."
-                $updSaltado++
+                $script:updSaltado++
             }
             Write-Host ""
         }
@@ -605,18 +850,11 @@ if ($modoSel -eq "2") {
         Write-Host ""
     }
 
-    # --- Librerias Python ---
-    Write-Info "Librerias Python..."
-    if (Test-PipReal) {
-        # -q oculta el listado "Requirement already satisfied"; solo muestra cambios reales
-        python -m pip install --upgrade -q fastapi "uvicorn[standard]" python-multipart pdfplumber requests
-        $codigo = $LASTEXITCODE
-        if ($codigo -eq 0) { Write-OK "Librerias Python al dia."; $updAlDia++ }
-        else { Write-Warn "Librerias Python: error al actualizar."; $updError++ }
-    } else {
-        Write-Dim "pip no disponible. Saltado."
-        $updSaltado++
-    }
+    # --- Librerias Python: nunca modificar el interprete compartido ---
+    Write-Info 'Librerias Python...'
+    $pythonResult=Invoke-ForjaPythonLibraries -Update
+    Add-UpdResultado $pythonResult.State
+    if ($pythonResult.SharedConflict) { Add-UpdResultado 'aviso' }
 
     # --- Resumen ---
     Write-Host ""
@@ -624,12 +862,14 @@ if ($modoSel -eq "2") {
     Write-Section "  RESUMEN DE ACTUALIZACION"
     Write-Section "============================================================"
     Write-Host ""
-    Write-Host "  Actualizados:    $updOK" -ForegroundColor Green
-    Write-Host "  Ya al dia:       $updAlDia" -ForegroundColor Green
-    Write-Host "  Saltados:        $updSaltado" -ForegroundColor DarkGray
+    Write-Host "  Actualizados:    $script:updOK" -ForegroundColor Green
+    Write-Host "  Ya al dia:       $script:updAlDia" -ForegroundColor Green
+    Write-Host "  Saltados:        $script:updSaltado" -ForegroundColor DarkGray
+    Write-Host "  Pendientes:      $script:updPendiente" -ForegroundColor Yellow
+    Write-Host "  Con avisos:      $script:updAvisos" -ForegroundColor Yellow
+    Write-Host "  Con errores:     $script:updError" -ForegroundColor Yellow
 
-    if ($updError -gt 0) {
-        Write-Host "  Con errores:     $updError" -ForegroundColor Yellow
+    if ($script:updError -gt 0) {
         Write-Host ""
         Write-Warn "Revisa el detalle de cada error mas arriba. Causas tipicas:"
         Write-Warn "un programa abierto (cerralo y reintenta) o una falla temporal"
@@ -646,7 +886,7 @@ if ($modoSel -eq "2") {
 
     Read-Host "  Presiona ENTER para cerrar"
 
-    if ($updError -gt 0) { exit 1 }; exit 0
+    if ($script:updError -gt 0 -or $script:updPendiente -gt 0) { exit 1 }; exit 0
 }
 
 # ============================================================
@@ -883,26 +1123,11 @@ Write-Host ""
 Write-Info "Verificando..."
 Write-Host ""
 
-if (Test-FastapiInstalled) {
-    Write-OK "Librerias ya instaladas."
-    $status["pylibs"] = "OK"
-} else {
-    $pc = $null
-    if (Test-PipReal) { $pc = "python -m pip" }
-
-    if ($pc) {
-        Write-Info "[INSTALANDO] Librerias..."
-        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        python -m pip install fastapi "uvicorn[standard]" python-multipart pdfplumber requests 2>&1 | ForEach-Object { Write-Host "  $_" }
-        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        if ($LASTEXITCODE -eq 0 -and (Test-FastapiInstalled)) { Write-OK "Instaladas."; $status["pylibs"] = "OK" }
-        else { Write-Err "Error."; $status["pylibs"] = "ERROR" }
-    } else {
-        Write-Warn "pip no disponible. Reinicia y corre el script de nuevo."
-        $status["pylibs"] = "PENDIENTE"
-        $necesitaReabrir = $true
-    }
-}
+$pythonResult=Invoke-ForjaPythonLibraries
+if ($pythonResult.State -in @('ok','aldia')) { $status['pylibs']='OK' }
+elseif ($pythonResult.State -eq 'saltado') { $status['pylibs']='SALTADO' }
+else { $status['pylibs']='ERROR' }
+if ($pythonResult.SharedConflict) { Write-Warn 'El Python compartido requiere revision por separado. No se modifico.' }
 
 # ============================================================
 #  [9] VS CODE

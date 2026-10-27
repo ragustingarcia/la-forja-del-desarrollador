@@ -28,3 +28,5 @@ jobs:
           ./tests/security.tests.ps1
           ./tests/flows.tests.ps1
           ./tests/native-tools.tests.ps1
+          ./tests/python-environment.tests.ps1
+          ./tests/msi-repair.tests.ps1

@@ -13,6 +13,9 @@ if ($FlowCase) {
     $runner=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaTool' },$true)
     if ($parseErrors.Count -gt 0 -or -not $runner) { throw 'No se pudo aislar la ejecucion de CLIs en la fixture' }
     $script:text=$script:text.Replace($runner.Extent.Text, 'function Invoke-ForjaTool { param([string]$Name) Invoke-FakeTool -Name $Name -Arguments $args }')
+    $libraries=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPythonLibraries' },$true)
+    if (-not $libraries) { throw 'Falta frontera de librerias Python' }
+    $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
     function global:Clear-Host {}
     function global:Read-Host { param($Prompt)
         $script:answers++
@@ -23,6 +26,7 @@ if ($FlowCase) {
                 'update-fail' { return '2' }
                 'update-current' { return '2' }
                 'cleanup-fail' { return '2' }
+                'python-conflict' { return '2' }
                 'cancel' { return '1' }
                 'diagnostic' { return '3' }
                 default { return '' }
@@ -52,6 +56,7 @@ if ($FlowCase) {
             if ($Name -eq 'pip' -and $Arguments[0] -eq '--version') { return 'pip 24.0' }
             $global:LASTEXITCODE = 5; return 'SIMULATED_ERROR'
         }
+        if ($Arguments -contains '--version') { return '1.0.0' }
         switch ($Name) {
             'npm' { if ($Arguments[0] -eq 'list') { return "$($Arguments[2])@1.0.0" }; return '1.0.0' }
             'winget' { $i = [array]::IndexOf($Arguments, '--id'); if ($i -ge 0) { return "$($Arguments[$i+1]) 1.0.0" }; return 'v1.0.0' }
@@ -79,7 +84,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','setup-fail','update-fail','update-current','cleanup-fail','cancel','diagnostic','invalid')) {
+    foreach ($case in @('setup-ok','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -102,6 +107,16 @@ try {
             $uninstall=[array]::FindIndex([string[]]$calls,[Predicate[string]]{ param($line) $line -match '^npm uninstall' })
             $claude=[array]::FindIndex([string[]]$calls,[Predicate[string]]{ param($line) $line -match '^claude update' })
             if ($uninstall -lt 0 -or $claude -le $uninstall -or $stdout -notmatch 'RESUMEN DE ACTUALIZACION') { throw 'No continua al fallar limpieza de Claude' }
+        }
+        if ($case -in @('update-current','cleanup-fail','python-conflict')) {
+            $updated=[regex]::Match($stdout,'Actualizados:\s*(\d+)').Groups[1].Value
+            $current=[regex]::Match($stdout,'Ya al dia:\s*(\d+)').Groups[1].Value
+            $errors=[regex]::Match($stdout,'Con errores:\s*(\d+)').Groups[1].Value
+            $pending=[regex]::Match($stdout,'Pendientes:\s*(\d+)').Groups[1].Value
+            if ($updated -ne '0' -or $current -ne '19') { throw "Contadores incorrectos $case : $updated/$current" }
+            if ($case -eq 'cleanup-fail' -and $errors -ne '1') { throw 'La limpieza fallida no quedo en el resumen' }
+            $warnings=[regex]::Match($stdout,'Con avisos:\s*(\d+)').Groups[1].Value
+            if ($case -eq 'python-conflict' -and ($pending -ne '0' -or $warnings -ne '1')) { throw 'El conflicto compartido debe quedar como aviso separado, sin afirmar que se reparo' }
         }
         $passed++
         Write-Host "PASS flujo $case / exit $expected / $($calls.Count) invocaciones simuladas"
