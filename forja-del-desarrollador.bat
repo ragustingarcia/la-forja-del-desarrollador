@@ -1197,6 +1197,103 @@ function Show-ForjaProjectStack {
     Write-Info 'Grok Bot no tiene una CLI independiente verificada aqui. No se instala un paquete grok de terceros.'
 }
 
+function Get-ForjaConsoleSize {
+    $width=80;$height=30
+    try {
+        if($Host.UI.RawUI.WindowSize.Width -ge 40){$width=[int]$Host.UI.RawUI.WindowSize.Width}
+        if($Host.UI.RawUI.WindowSize.Height -ge 12){$height=[int]$Host.UI.RawUI.WindowSize.Height}
+    } catch {}
+    return [pscustomobject]@{Width=[Math]::Min(80,$width);Height=$height}
+}
+function Format-ForjaMenuLine { param([string]$Text,[int]$Width=80,[string]$Prefix='', [string]$Continuation='')
+    $line=$Prefix
+    foreach($word in @($Text -split '\s+' | Where-Object {$_})){
+        $spacer='';if($line.Length -gt $Prefix.Length -or ($line -ne $Prefix -and $line.Length -gt $Continuation.Length)){$spacer=' '}
+        if(($line.Length+$spacer.Length+$word.Length) -gt $Width -and $line.Trim()){
+            Write-Output $line.TrimEnd();$line=$Continuation;$spacer=''
+        }
+        # Los nombres largos se cortan solo si no caben en una linea por si solos.
+        $remaining=$word
+        while($remaining.Length -gt ($Width-$line.Length-$spacer.Length)){
+            $available=$Width-$line.Length-$spacer.Length
+            if($available -le 0){Write-Output $line.TrimEnd();$line=$Continuation;$spacer='';continue}
+            $line+=$spacer+$remaining.Substring(0,$available)
+            Write-Output $line;$remaining=$remaining.Substring($available);$line=$Continuation;$spacer=''
+        }
+        $line+=$spacer+$remaining
+    }
+    if($line.Trim()){Write-Output $line.TrimEnd()}
+}
+function Get-ForjaMenuSections {
+    $sections=[ordered]@{
+        'BASE'=@('WinGet','PowerShell 7','WSL','Git','Node/npm','pnpm','Python')
+        'APPS / IDE'=@('VS Code','Claude App')
+        'CLI AGENTES'=@('Claude Code')
+        'CLOUD'=@('Netlify','Vercel','Supabase')
+        'DATOS'=@('Docker','mongosh','PostGIS*')
+        'PYTHON'=@('Libs base')
+        'COMPILAR'=@()
+        'ANDROID'=@()
+        'UTILIDADES'=@('GitHub CLI','Snyk','Ollama','FFmpeg')
+        'INTEGRACION'=@('Skills opcionales','Conexiones')
+    }
+    $groups=@{'Editores y agentes'='APPS / IDE';'CLI de agentes'='CLI AGENTES';'Gemini CLI (compatibilidad)'='CLI AGENTES';'Servicios cloud'='CLOUD';'Bases de datos locales'='DATOS';'Python cientifico'='PYTHON';'Compilacion y escritorio'='COMPILAR';'Android y Java'='ANDROID'}
+    $short=@{'cursor'='Cursor';'antigravity'='Antigravity App';'antigravity-ide'='Antigravity IDE';'gemini-app'='Gemini';'grok-bot'='Grok Bot';'codex-app'='ChatGPT/Codex';'codex-cli'='Codex';'agy-cli'='agy';'cursor-cli'='Cursor Agent';'gemini-cli'='Gemini CLI*';'neon-cli'='Neon';'resend-cli'='Resend';'render-cli'='Render';'cloudflared'='cloudflared';'wrangler'='Wrangler';'postgresql'='PostgreSQL 17';'rust'='Rust/Cargo';'buildtools'='Build Tools';'dotnet'='.NET SDK 10';'inno'='Inno Setup';'android'='Android Studio';'jdk17'='JDK 17';'jdk21'='JDK 21';'miniforge'='Miniforge';'python-web-vision'='Flask/OpenCV/NumPy'}
+    foreach($tool in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core})){
+        $group=$groups[$tool.Group];if(-not $group){$group=$tool.Group}
+        if(-not $sections.Contains($group)){$sections[$group]=@()}
+        $label=$short[$tool.Id];if(-not $label){$label=$tool.Name}
+        $sections[$group]+=$label
+    }
+    foreach($name in $sections.Keys){[pscustomobject]@{Name=$name;Items=$sections[$name]}}
+}
+function Show-ForjaMainMenu { param([int]$Width=0)
+    if($Width -le 0){$Width=(Get-ForjaConsoleSize).Width}
+    $Width=[Math]::Max(40,[Math]::Min(80,$Width))
+    $rule='='*($Width-2)
+    Write-Section $rule
+    foreach($line in @(Format-ForjaMenuLine ("FORJA DEL DESARROLLADOR "+$VERSION) $Width)){Write-Section $line}
+    foreach($line in @(Format-ForjaMenuLine 'Stack IA | Rodo Agustin Garcia | ragustingarcia.com' $Width)){Write-Dim $line}
+    Write-Section $rule
+    foreach($section in @(Get-ForjaMenuSections)){
+        $prefix=$section.Name.PadRight(13)
+        foreach($line in @(Format-ForjaMenuLine ($section.Items -join ', ') $Width $prefix (' '*13))){Write-Host $line}
+    }
+    foreach($line in @(Format-ForjaMenuLine '* Condiciones y pasos por proyecto: opciones 4 y 5.' $Width)){Write-Dim $line}
+    Write-Section $rule
+    foreach($item in @(
+        '[1] Preparar stack   - base y herramientas a elegir',
+        '[2] Solo actualizar  - herramientas ya instaladas',
+        '[3] Diagnostico      - rutas y presencia',
+        '[4] Guias de proyecto y conexiones',
+        '[5] Catalogo completo, herramienta por herramienta',
+        '[0] Salir (tambien ENTER)'
+    )){foreach($line in @(Format-ForjaMenuLine $item $Width)){Write-Host $line}}
+}
+function Show-ForjaFullCatalog {
+    $size=Get-ForjaConsoleSize
+    $rows=@()
+    $base=@('WinGet','PowerShell 7','WSL','Git','Node.js LTS / npm','pnpm','Python (ramas y actualizaciones)','Librerias Python en venv propio','VS Code','Claude Code CLI','Claude App','GitHub CLI','Docker Desktop','MongoDB Shell (mongosh)','Ollama','FFmpeg','Netlify CLI','Vercel CLI','Supabase CLI','Snyk CLI','Skills opcionales de Claude','Asistente de conexion de servicios')
+    $rows+='BASE'
+    foreach($name in $base){$rows+=@(Format-ForjaMenuLine $name $size.Width '  - ' '    ')}
+    foreach($group in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core} | Group-Object Group)){
+        $rows+=@(Format-ForjaMenuLine $group.Name.ToUpperInvariant() $size.Width)
+        foreach($tool in $group.Group){$rows+=@(Format-ForjaMenuLine $tool.Name $size.Width '  - ' '    ')}
+    }
+    $rows+=@(Format-ForjaMenuLine 'POR PROYECTO: React, TypeScript, Vite, Tailwind, PWA, extensiones Chrome, PostGIS y autenticaciones (opcion 4).' $size.Width)
+    $rows+=@(Format-ForjaMenuLine 'Gemini CLI: revisar compatibilidad de la cuenta. Sin controladores ni aplicaciones de uso diario.' $size.Width)
+    $pageSize=[Math]::Max(5,$size.Height-5)
+    $pages=[int][Math]::Ceiling($rows.Count/[double]$pageSize)
+    for($offset=0;$offset -lt $rows.Count;$offset+=$pageSize){
+        Clear-Host
+        Write-Section ('CATALOGO COMPLETO | '+([int]($offset/$pageSize)+1)+' / '+$pages)
+        $end=[Math]::Min($offset+$pageSize,$rows.Count)
+        for($index=$offset;$index -lt $end;$index++){Write-Host $rows[$index]}
+        if($end -lt $rows.Count){$answer=Read-Host 'ENTER: siguiente | 0: volver';if($answer -eq '0'){return}}
+        else {$null=Read-Host 'ENTER: volver al menu'}
+    }
+}
+
 $T = 22
 $status = @{}
 $necesitaReabrir = $false
@@ -1204,64 +1301,12 @@ $necesitaReabrir = $false
 # ============================================================
 #  BIENVENIDA
 # ============================================================
-Clear-Host
-Write-Host ""
-Write-Section "============================================================"
-Write-Host ""
-Write-Host "    FORJA DEL DESARROLLADOR $VERSION" -ForegroundColor Yellow
-Write-Host "    Stack para crear con agentes de IA" -ForegroundColor White
-Write-Host ""
-Write-Dim   "    by Rodo Agustin Garcia  |  ragustingarcia.com"
-Write-Host ""
-Write-Section "============================================================"
-Write-Host ""
-Write-Host '  "Todo gran proyecto empieza con las herramientas correctas."'
-Write-Host ""
-Write-Section "============================================================"
-Write-Host ""
-Write-Host "  --- INFRAESTRUCTURA (1-4) ---" -ForegroundColor White
-Write-Host "    [ 1] winget        [ 2] PowerShell 7"
-Write-Host "    [ 3] WSL           [ 4] Git"
-Write-Host ""
-Write-Host "  --- LENGUAJES (5-8) ---" -ForegroundColor White
-Write-Host "    [ 5] Node.js LTS   [ 6] pnpm"
-Write-Host "    [ 7] Python        [ 8] Libs Python"
-Write-Host ""
-Write-Host "  --- DESARROLLO (9-12) ---" -ForegroundColor White
-Write-Host "    [ 9] VS Code       [10] Claude Code CLI"
-Write-Host "    [11] Claude App    [12] GitHub CLI"
-Write-Host ""
-Write-Host "  --- SERVICIOS (13-16) ---" -ForegroundColor White
-Write-Host "    [13] Docker        [14] mongosh"
-Write-Host "    [15] Ollama        [16] FFmpeg"
-Write-Host ""
-Write-Host "  --- DEPLOY Y SEGURIDAD (17-20) ---" -ForegroundColor White
-Write-Host "    [17] Netlify CLI   [18] Vercel CLI"
-Write-Host "    [19] Supabase CLI  [20] Snyk CLI"
-Write-Host ""
-Write-Host "  --- SKILLS (21) ---" -ForegroundColor White
-Write-Host "    [21] Skills de Claude Code (pack Forja + oficiales)"
-Write-Host ""
-Write-Host "  --- VINCULACIONES (22) ---" -ForegroundColor White
-Write-Host "    [22] Asistente de conexion de servicios"
-Write-Host ""
-Write-Section "============================================================"
-Write-Host ""
-Write-Host "  MODO DE EJECUCION:" -ForegroundColor White
-Write-Host ""
-Write-Host "    [1] Preparar stack    - base + elegir agentes y servicios" -ForegroundColor Green
-Write-Host "    [2] Solo actualizar   - actualizar lo que ya esta instalado" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "    [3] Diagnostico       - rutas de herramientas, sin ejecutar instaladores" -ForegroundColor Cyan
-Write-Host "    [4] Stack por proyecto - frontend, Flask/OpenCV, PostGIS y conexiones"
-Write-Host "    [0] Salir (por defecto)" -ForegroundColor DarkGray
-Write-Host ""
-Write-Section '  STACK AMPLIADO (seleccion individual en modo 1)'
-foreach($group in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core} | Group-Object Group)) {
-    Write-Host ('  '+$group.Name+': '+(($group.Group | ForEach-Object {$_.Name}) -join ', '))
-}
-Write-Dim '  Sin controladores ni aplicaciones de uso diario.'
-$modoSel = Read-Host "  Elegi 1, 2, 3 o 4 (ENTER = salir)"
+do {
+    Clear-Host
+    Show-ForjaMainMenu
+    $modoSel = Read-Host 'Modo (0-5; ENTER = salir)'
+    if($modoSel -eq '5'){Show-ForjaFullCatalog}
+} while($modoSel -eq '5')
 if($modoSel -eq '4'){Show-ForjaProjectStack;Read-Host '  ENTER para cerrar';exit 0}
 if ($modoSel -eq '3') {
     foreach ($tool in @('winget','pwsh','wsl','git','node','npm','python','pip','claude','gh','docker','snyk')) {

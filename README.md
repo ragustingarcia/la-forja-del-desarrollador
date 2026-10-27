@@ -19,6 +19,7 @@ Descargá `forja-del-desarrollador.bat` y abrilo con doble clic, **sin ejecutar 
 | **[2] Solo actualizar** | Recorre la base y el catálogo ampliado; saltea herramientas ausentes. Puede ofrecer agregar Python 3.14 en paralelo, con confirmación adicional. |
 | **[3] Diagnóstico** | Muestra rutas, registro Store y ubicaciones de paquetes nativos revisados; no instala ni autentica. |
 | **[4] Stack por proyecto** | Muestra recetas para frontend, Flask/OpenCV, PostGIS y conexiones; no ejecuta esas recetas. |
+| **[5] Catálogo completo** | Lista todas las herramientas por páginas; permite volver al menú sin instalar. |
 | **[0] / ENTER** | Sale sin cambios. |
 
 No incluye controladores ni aplicaciones de uso diario. Cada agente conserva su propia configuración, skills y MCP.

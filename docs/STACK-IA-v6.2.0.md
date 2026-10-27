@@ -10,6 +10,8 @@ El modo 1 prepara la base y ofrece cada entrada adicional del catálogo. Se pued
 Antigravity App e IDE, Gemini Desktop, Grok Bot y la app ChatGPT/Codex; las CLI se seleccionan
 separadamente. El modo 2 consulta las herramientas instaladas y conserva un resultado por entrada.
 El modo 3 es de diagnóstico; el modo 4 explica el stack por proyecto sin ejecutar las recetas.
+El menú reúne la base y las herramientas adicionales por categoría, con líneas adaptadas al ancho
+de la consola. La opción 5 muestra el catálogo completo por páginas y permite volver al menú.
 
 El catálogo adicional tiene 25 entradas seleccionables. La entrada 26 corresponde al paquete
 nativo de Supabase, que se usa desde el paso existente de la base. El JSON distribuido y el
@@ -117,7 +119,7 @@ requieren actualizar el catálogo revisado de Forja; no se descargan automática
 
 ## Evidencia y límites
 
-Validación local en PowerShell 5.1 y 7: **221 casos por shell** (81 de seguridad, 12 flujos,
+Validación local en PowerShell 5.1 y 7: **223 casos por shell** (81 de seguridad, 14 flujos,
 5 de ejecución nativa, 11 Python, 16 MSI y 96 del catálogo/stack), sin fallos.
 
 Las pruebas aisladas cubren selección y resumen completos, versiones Python coexistentes, rechazo

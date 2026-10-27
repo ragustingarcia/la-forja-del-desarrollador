@@ -46,9 +46,12 @@ if ($FlowCase) {
                 'cancel' { return '1' }
                 'diagnostic' { return '3' }
                 'project-guide' { return '4' }
+                'catalog' { return '5' }
+                'catalog-return' { return '5' }
                 default { return '' }
             }
         }
+        if ($script:answers -eq 2 -and $FlowCase -eq 'catalog-return') { return '0' }
         if ($script:answers -eq 2 -and $FlowCase -ne 'cancel') { return 'S' }
         if ($FlowCase -eq 'cleanup-fail' -and $Prompt -like '*Eliminar la instalacion npm*') { return 'S' }
         if ($FlowCase -eq 'stack-selected' -and ($Prompt -like '*Incluir Codex CLI?*' -or $Prompt -like '*Incluir Flask + OpenCV*' -or $Prompt -like '*Incluir Render CLI*')) { return 'S' }
@@ -102,7 +105,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','invalid')) {
+    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','catalog','catalog-return','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -124,7 +127,14 @@ try {
             if($summary -notmatch '\[OK\]\s+Codex CLI' -or $summary -notmatch '\[OK\]\s+Flask \+ OpenCV' -or $summary -notmatch '\[OK\]\s+Render CLI'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
         }
         if($case -eq 'fresh-setup' -and $calls -notcontains 'archive supabase-native'){throw 'No se probo Supabase ausente con el instalador nativo simulado'}
-        if ($case -in @('cancel','diagnostic','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
+        if ($case -in @('cancel','diagnostic','project-guide','catalog','catalog-return','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
+        if($case -eq 'catalog' -and ($stdout -notmatch 'CATALOGO COMPLETO' -or $stdout -notmatch 'Cloudflare Wrangler' -or $stdout -notmatch 'Miniforge3')){throw 'Catalogo incompleto o paginacion interrumpida'}
+        if($case -in @('catalog','catalog-return') -and @([regex]::Matches($stdout,'FORJA DEL DESARROLLADOR')).Count -ne 2){throw 'El catalogo no regresa al menu principal'}
+        if($case -eq 'invalid'){
+            $menuLines=@($stdout -split '\r?\n' | Where-Object {$_})
+            if(@($menuLines | Where-Object {$_.Length -gt 80}).Count -gt 0 -or $menuLines.Count -gt 26){throw 'El menu principal supera el ancho o alto esperado'}
+            foreach($name in @('Cursor','Antigravity','Grok Bot','ChatGPT/Codex','Neon','Resend','Render','Wrangler','PostgreSQL','Miniforge')){if($stdout -notmatch [regex]::Escape($name)){throw "El menu omite $name"}}
+        }
         if ($case -eq 'update-fail' -and @($calls | Where-Object { $_ -match '^npm install' }).Count -gt 0) { throw 'Se instalo a pesar de fallar el registro' }
         if ($case -eq 'setup-fail' -and $stdout -notmatch '\[X\]') { throw 'No mostro errores de instalacion' }
         if ($case -eq 'update-current' -and $stdout -notmatch 'instalada: 1.0.0') { throw 'No muestra la version de segunda pasada' }
