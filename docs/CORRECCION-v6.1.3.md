@@ -63,6 +63,20 @@ Además se realizó la reparación real con el consentimiento explícito del usu
 el ejecutable. Esa evidencia se distingue de las pruebas simuladas. La instalación completa de
 las demás herramientas y los reinicios de WSL en una VM limpia siguen fuera de esta comprobación.
 
+## Segunda pasada confirmada por el usuario
+
+El 27 de octubre de 2026, la salida compartida por el usuario de una nueva ejecución de
+**v6.1.3**, modo **[2] Solo actualizar**, confirmó el recorrido completo y su cierre normal:
+
+- **0 actualizados, 19 al día, 0 saltados, 0 pendientes, 0 avisos y 0 errores**.
+- MongoDB Shell reconocido en **2.14.0**, sin repetir la reparación.
+- Librerías Python verificadas dentro del entorno aislado de Forja.
+- Claude Code y WSL informaron estar al día; se alcanzó el resumen y la espera de ENTER.
+
+El resultado de cero actualizaciones es el esperado para esta pasada: no había cambios que
+aplicar. Esta evidencia confirma el recorrido de actualización observado, sin extender la
+comprobación a instalaciones nuevas, conexiones de servicios o reinicios de WSL.
+
 ## Fuentes primarias
 
 - [Opciones de Windows Installer](https://learn.microsoft.com/en-us/windows/win32/msi/standard-installer-command-line-options).
