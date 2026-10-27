@@ -65,7 +65,7 @@ La Forja no desactiva SmartScreen, antivirus ni políticas corporativas.
 | 5 | Node.js LTS | JavaScript del lado del servidor + npm |
 | 6 | pnpm | Alternativa a npm: más rápido, menos disco |
 | 7 | Python 3.13 | Backend, IA, automatización |
-| 8 | Libs Python | fastapi, uvicorn, python-multipart, pdfplumber, requests |
+| 8 | Libs Python | fastapi, uvicorn, python-multipart, pdfplumber, requests, en un entorno propio de Forja |
 
 ### Desarrollo
 | # | Herramienta | Para qué |
@@ -163,7 +163,7 @@ Corré el script y elegí el modo **[2] Solo actualizar**. Recorre las herramien
 - **winget**: PowerShell 7, Git, Node.js, pnpm, Python, VS Code, Claude Desktop, GitHub CLI, Docker, mongosh, Ollama, FFmpeg, Supabase CLI
 - **Claude Code CLI**: su propio comando `claude update`
 - **npm**: Netlify CLI, Vercel CLI y Snyk CLI, consultando e instalando una versión concreta
-- **WSL** y **librerías Python** (`pip --upgrade`)
+- **WSL** y **librerías Python**, estas últimas únicamente dentro de `%LOCALAPPDATA%\Forja\Python\venv`
 
 Lo que no está instalado se saltea sin preguntar. Al final muestra un resumen: actualizados / ya al día / saltados / con errores.
 
@@ -181,6 +181,7 @@ Para actualizar **el script en sí**, descargá la última versión de este repo
 
 | Versión | Cambios |
 |---|---|
+| v6.1.2 | Corrige los contadores del resumen; aísla las librerías Python de Forja y verifica dependencias/imports; distingue avisos npm de fallos y verifica las CLIs; muestra el diagnóstico MSI de mongosh y evita reintentos de fallos conocidos sin confirmación. [Detalle](docs/CORRECCION-v6.1.2.md) |
 | v6.1.1 | Corrige la segunda pasada de WinGet, muestra versiones instaladas, reconoce PowerShell desde el inventario general, usa ejecutables `.exe`/`.cmd` para CLIs npm y continúa ante una limpieza fallida de Claude. Agrega pruebas nativas bajo política Restricted. [Detalle](docs/CORRECCION-v6.1.1.md) |
 | v6.1 | **Seguridad**: sin elevación global ni bootstrap temporal; inicio con Windows PowerShell 5.1; diagnóstico; confirmación explícita; sin captura de tokens; skills por SHA fijo, sin enlaces ni sobrescrituras; verificación de fallos y pruebas Windows en CI |
 | v6.0 | **Paso 21 — Skills de Claude Code**: pack de la Forja (skills del autor con crédito preservado, opción de personalizar con tu nombre) + set oficial de Anthropic clonado de su repo; vinculaciones pasan a ser el paso 22 |

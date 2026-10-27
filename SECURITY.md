@@ -1,4 +1,4 @@
-# Seguridad y migración a v6.1.1
+# Seguridad y migración a v6.1.2
 
 La Forja instala software de terceros y configura herramientas en tu cuenta de Windows.
 Ejecutala con doble clic, desde una cuenta sin elevar. Los instaladores de paquetes pueden
@@ -48,6 +48,11 @@ correcta, revisando primero qué otras herramientas dependen de ellas:
 
 ## Límites y verificación de paquetes
 
+Las librerías Python se instalan con el intérprete del venv de Forja, sin actualizar paquetes
+del Python compartido. Antes de dar éxito se verifican dependencias e imports. Los conflictos
+preexistentes de otros entornos se muestran como avisos; conservarlos no significa haberlos reparado.
+Un fallo MSI de mongosh se conserva como error o pendiente y no dispara cambios automáticos de permisos.
+
 WinGet utiliza ID exacto y fuente `winget`, conservando las validaciones de hash de su gestor.
 npm y pip siguen instalando paquetes y dependencias publicados por terceros, que pueden ejecutar
 scripts de instalación. El modo actualizar requiere confirmación y no representa una certificación
@@ -69,6 +74,7 @@ powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\tests\flows.tests.ps
 pwsh -NoProfile -File .\tests\security.tests.ps1
 pwsh -NoProfile -File .\tests\flows.tests.ps1
 pwsh -NoProfile -File .\tests\native-tools.tests.ps1
+pwsh -NoProfile -File .\tests\python-environment.tests.ps1
 ```
 
 `RemoteSigned` en ese comando afecta solo al proceso de prueba; no modifica políticas persistentes

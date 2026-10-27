@@ -7,7 +7,7 @@ description: Construye y revisa instaladores BAT para Windows con arranque hibri
 > Distribuida con [La Forja del Desarrollador](https://github.com/ragustingarcia/la-forja-del-desarrollador).
 > Si la adaptás o redistribuís, conservá este crédito. ¡Gracias!
 
-# Constructor de instaladores BAT | v6.1.1
+# Constructor de instaladores BAT | v6.1.2
 
 ## Alcance
 
@@ -59,6 +59,14 @@ return ($code -eq 0)
     Resolver aplicaciones `.exe`/`.cmd` explícitamente para npm y sus CLIs. No cambiar la política.
     Capturar fallos por herramienta para que se llegue al resumen. Probar shims CMD reales inertes
     bajo Restricted, además de mocks; los mocks de funciones no reproducen este problema.
+12. Todos los contadores del resumen deben usar el mismo scope que las funciones que los
+    incrementan. Probar los valores del resumen ejecutando el cuerpo dentro de un scriptblock.
+13. Administrar las librerías de la herramienta en su propio venv. Nunca actualizar el Python
+    compartido para completar un setup general. Verificar `pip check` e imports en el intérprete
+    explícito de ese venv; un exit 0 de pip no basta. Respetar la decisión de conservar otros entornos.
+14. Distinguir avisos npm de fallos y comprobar la CLI instalada. No agregar aprobaciones globales
+    de scripts para hacer desaparecer advertencias. Un MSI fallido debe conservar su diagnóstico,
+    sin cerrar procesos, borrar instalaciones ni modificar permisos automáticamente.
 
 ## Consentimiento y credenciales
 

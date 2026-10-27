@@ -8,7 +8,11 @@ if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 foreach ($definition in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     . ([scriptblock]::Create($definition.Extent.Text))
 }
-function Invoke-ForjaTool { param([string]$Name) & $Name @args }
+function Invoke-ForjaTool { param([string]$Name)
+    if ($args -contains '--version') { $global:LASTEXITCODE=$script:runtimeExit; $script:runtimeOutput; return }
+    & $Name @args
+}
+$script:runtimeExit=0; $script:runtimeOutput='1.0.0'
 $passed = 0
 function Assert { param([bool]$Condition, [string]$Message)
     if (-not $Condition) { throw "FALLO: $Message" }
@@ -36,7 +40,11 @@ function global:npm {
     switch ($args[0]) {
         'list' { $global:LASTEXITCODE = $script:npmListExit; $script:npmListOutput }
         'view' { $global:LASTEXITCODE = $script:npmViewExit; $script:npmViewOutput }
-        'install' { $global:LASTEXITCODE = $script:npmInstallExit; 'installer output' }
+        'install' {
+            $global:LASTEXITCODE = $script:npmInstallExit
+            if ($script:afterInstallVersion) { $script:npmListOutput='snyk@'+$script:afterInstallVersion }
+            if ($script:npmInstallOutput) { $script:npmInstallOutput } else { 'installer output' }
+        }
         default { throw 'npm fuera de lo permitido por la prueba' }
     }
 }
@@ -119,6 +127,32 @@ try {
     Assert ($result.Count -eq 1 -and $result[0] -eq $false) 'Install-Npm no oculta fallo si paquete previo sigue presente'
     $script:npmInstallExit=0
     Assert ((Invoke-NpmUpdate 'snyk' 'Snyk') -eq 'error') 'npm exit cero con version previa no afirma actualizacion'
+
+    $script:npmListOutput='snyk@1.0.0'; $script:npmViewOutput='1.0.0'; $script:runtimeExit=1
+    Assert ((Invoke-NpmUpdate 'snyk' 'Snyk') -eq 'error') 'paquete existente con CLI rota no se informa al dia'
+    $script:npmViewOutput='2.0.0'; $script:runtimeExit=0; $script:runtimeOutput='2.0.0'; $script:afterInstallVersion='2.0.0'
+    $script:npmInstallOutput='npm warn install-scripts policy advisory'
+    Assert ((Invoke-NpmUpdate 'snyk' 'Snyk') -eq 'ok-aviso') 'aviso npm y CLI operativa se distinguen de un fallo'
+    Assert (@($script:npmCalls | Where-Object { ($_ -join ' ') -match 'allow-scripts|ignore-scripts|force' }).Count -eq 0) 'no se modifica ni relaja politica de scripts'
+    $script:updOK=0; $script:updAlDia=0; $script:updError=0; $script:updSaltado=0; $script:updPendiente=0; $script:updAvisos=0
+    & { Add-UpdResultado 'ok-aviso'; Add-UpdResultado 'aldia'; Add-UpdResultado 'error'; Add-UpdResultado 'pendiente' }
+    Assert ($script:updOK -eq 1 -and $script:updAlDia -eq 1 -and $script:updError -eq 1 -and $script:updPendiente -eq 1 -and $script:updAvisos -eq 1) 'contadores sobreviven al scope del bloque del BAT'
+
+    $logRoot=Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+    [IO.Directory]::CreateDirectory($logRoot) | Out-Null
+    $msiLog=Join-Path $logRoot 'MongoDB.Shell.2.14.0-fixture.log'
+    [IO.File]::WriteAllText($msiLog,'Error 1304. Error writing to file: mongosh.exe')
+    $detail=Get-InstallerFailureDetail "Installer failed with exit code: 1603`r`nInstaller log is available at: $msiLog`r`n"
+    Assert ($detail -match '1603' -and $detail -match '1304') 'diagnostico muestra codigo MSI real ademas del HRESULT'
+    Assert ((Get-MongoshPreviousFailure '2.14.0') -eq $msiLog) 'identifica fallo previo de la version exacta de mongosh'
+    Assert (-not (Get-MongoshPreviousFailure '2.15.0')) 'no atribuye log antiguo a otra version'
+    function Test-MongoshBusy { return $script:mockMongoBusy }
+    $script:mockMongoBusy=$true
+    $script:mockWingetOutput='MongoDB Shell MongoDB.Shell 2.9.2 2.14.0 winget'; $script:mockWingetExit=0
+    Assert ((Invoke-WingetUpdate 'MongoDB.Shell' 'mongosh') -eq 'pendiente') 'mongosh abierto queda pendiente sin cerrar procesos'
+    Assert (-not ($script:wingetArgs -contains 'upgrade')) 'no invoca MSI mientras mongosh esta abierto'
+    $script:mockMongoBusy=$false; $script:mockAnswer='N'
+    Assert ((Invoke-WingetUpdate 'MongoDB.Shell' 'mongosh') -eq 'pendiente') 'fallo MSI conocido no se reintenta sin confirmacion'
 
     foreach ($answer in @('','no','salir','si y borrar','yes')) {
         $script:mockAnswer = $answer
