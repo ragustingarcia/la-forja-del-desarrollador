@@ -2,185 +2,111 @@
 
 # La Forja del Desarrollador
 
-> Setup completo para desarrollar con Claude Code en Windows.  
-> 21 herramientas + skills de Claude Code, instaladas, configuradas y vinculadas en un solo script.
+> Stack de desarrollo con agentes de IA en Windows: editores, CLI, lenguajes, bases de datos y servicios cloud.
+> Un BAT para preparar la base, elegir herramientas y actualizar lo que ya usás.
 
 [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-f0722e)](LICENSE)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-ffb454)](https://github.com/ragustingarcia/la-forja-del-desarrollador)
 [![Hecho por Rodolfo Agustín García](https://img.shields.io/badge/por-ragustingarcia.com-17151a)](https://ragustingarcia.com/)
 
----
+## Empezar
 
-## Qué hace
-
-Un `.bat` que corre en tu sesión normal de Windows, instala todo lo que necesitás para desarrollar con Claude Code en Windows, y te guía paso a paso para conectar cada servicio.
-
-Si algo ya está instalado, lo detecta y lo saltea. Si algo falla, te dice qué hacer. Podés volver a correrlo: verifica instalaciones y conserva las skills que ya existen. Revisá siempre el resumen y los avisos de cada proveedor.
-
----
-
-## Cómo usarlo
-
-```
-1. Descargá forja-del-desarrollador.bat
-2. Abrilo con doble clic, SIN "Ejecutar como administrador"
-3. Elegí el modo, confirmá y seguí las instrucciones en pantalla
-```
-
-Al arrancar, el script pregunta qué modo querés:
+Descargá `forja-del-desarrollador.bat` y abrilo con doble clic, **sin ejecutar toda la Forja como administrador**. Arranca con Windows PowerShell 5.1, incluido en Windows. Revisá los permisos de los instaladores de terceros.
 
 | Modo | Qué hace |
 |---|---|
-| **[1] Setup completo** | Instala las 21 herramientas y te guía para vincular cada servicio |
-| **[2] Solo actualizar** | Recorre lo que ya tenés instalado y lo actualiza a la versión publicada, en la misma ventana |
-| **[3] Diagnóstico** | Muestra las rutas de herramientas disponibles, sin ejecutar instaladores ni logins |
-| **[0] Salir / ENTER** | Cierra sin instalar nada |
+| **[1] Preparar stack** | Instala/verifica la base y pregunta individualmente qué agentes, CLI y servicios agregar. |
+| **[2] Solo actualizar** | Recorre la base y el catálogo ampliado; saltea herramientas ausentes. Puede ofrecer agregar Python 3.14 en paralelo, con confirmación adicional. |
+| **[3] Diagnóstico** | Muestra rutas, registro Store y ubicaciones de paquetes nativos revisados; no instala ni autentica. |
+| **[4] Stack por proyecto** | Muestra recetas para frontend, Flask/OpenCV, PostGIS y conexiones; no ejecuta esas recetas. |
+| **[0] / ENTER** | Sale sin cambios. |
 
-La Forja arranca con **Windows PowerShell 5.1**, incluido en Windows; no necesitás instalar
-PowerShell 7 previamente. Si abrís toda la Forja como administrador, se detiene. WSL pide
-UAC solo para su instalación y otros instaladores pueden mostrar su propio aviso de permisos.
+No incluye controladores ni aplicaciones de uso diario. Cada agente conserva su propia configuración, skills y MCP.
 
-Descargá el BAT desde este repositorio y revisá el código antes de ejecutarlo. Si Windows o
-una política de tu organización lo bloquea, verificá el origen y consultá al administrador del equipo.
-La Forja no desactiva SmartScreen, antivirus ni políticas corporativas.
+## Base de desarrollo
 
-**Seguridad y migración desde versiones anteriores:** [SECURITY.md](SECURITY.md).
-**Auditoría y límites de las pruebas:** [docs/AUDITORIA-SEGURIDAD-v6.1.md](docs/AUDITORIA-SEGURIDAD-v6.1.md).
+WinGet, PowerShell 7, WSL, Git, Node.js LTS/npm, pnpm, Python, librerías Python aisladas, VS Code, Claude Code y Desktop, GitHub CLI, Docker Desktop, mongosh, Ollama, FFmpeg, Netlify CLI, Vercel CLI, Supabase CLI y Snyk CLI. Los packs de skills Claude son opcionales y se conservan las skills existentes.
 
----
+El asistente de conexión de la base conserva los pasos de GitHub, Netlify, Vercel, Supabase, Snyk y Docker. Los servicios nuevos muestran sus comandos oficiales de autenticación para ejecutarlos manualmente. La instalación no crea bases, envía emails, publica dominios ni hace deploys.
 
-## Qué instala
+## Elegir el stack ampliado
 
-### Infraestructura
-| # | Herramienta | Para qué |
+| Grupo | Herramienta | Método |
 |---|---|---|
-| 1 | winget | Gestor de paquetes de Windows |
-| 2 | PowerShell 7 | Terminal moderna (se instala sin ser necesaria para arrancar) |
-| 3 | WSL | Linux dentro de Windows (necesario para Docker) |
-| 4 | Git | Control de versiones + configura nombre y email |
+| Editores y agentes | Cursor | winget |
+| Editores y agentes | Antigravity App | winget |
+| Editores y agentes | Antigravity IDE | winget |
+| Editores y agentes | Gemini Desktop | winget |
+| Editores y agentes | Grok Bot | winget |
+| Editores y agentes | App ChatGPT / Codex | store |
+| CLI de agentes | Codex CLI | npm |
+| CLI de agentes | Antigravity CLI (agy) | winget |
+| CLI de agentes | Cursor Agent CLI (Windows x64) | archive |
+| Gemini CLI (compatibilidad) | Gemini CLI (cuentas compatibles) | npm |
+| Servicios cloud | Neon CLI | npm |
+| Servicios cloud | Resend CLI | npm |
+| Servicios cloud | Render CLI (Windows x64) | archive |
+| Servicios cloud | Cloudflare Tunnel CLI | winget |
+| Servicios cloud | Cloudflare Wrangler (por proyecto) | project-npm |
+| Bases de datos locales | PostgreSQL 17 (servidor y cliente) | winget |
+| Compilacion y escritorio | Rust / Cargo (rustup) | winget |
+| Compilacion y escritorio | Visual Studio Build Tools 2022 | winget |
+| Compilacion y escritorio | .NET SDK 10 | winget |
+| Compilacion y escritorio | Inno Setup | winget |
+| Android y Java | Android Studio | winget |
+| Android y Java | Temurin JDK 17 | winget |
+| Android y Java | Temurin JDK 21 | winget |
+| Python cientifico | Miniforge3 | winget |
+| Python cientifico | Flask + OpenCV + NumPy (venv aislado) | python-venv |
 
-### Lenguajes
-| # | Herramienta | Para qué |
-|---|---|---|
-| 5 | Node.js LTS | JavaScript del lado del servidor + npm |
-| 6 | pnpm | Alternativa a npm: más rápido, menos disco |
-| 7 | Python 3.13 | Backend, IA, automatización |
-| 8 | Libs Python | fastapi, uvicorn, python-multipart, pdfplumber, requests, en un entorno propio de Forja |
+El catálogo legible está en [catalog/stack-ia.json](catalog/stack-ia.json). El BAT incluye una copia idéntica, por lo que sigue siendo un archivo único para el usuario. Los tests comprueban esa identidad.
 
-### Desarrollo
-| # | Herramienta | Para qué |
-|---|---|---|
-| 9 | VS Code | Editor de código |
-| 10 | Claude Code CLI | IA que desarrolla con vos (herramienta central) |
-| 11 | Claude Desktop | App de escritorio de Claude |
-| 12 | GitHub CLI | Gestionar repos, PRs e issues desde terminal |
+**Apps y CLI se tratan por separado.** Cursor y Cursor Agent son entradas diferentes; también Antigravity App, IDE y `agy`, y la app ChatGPT/Codex frente a `codex`. No se instala un paquete Grok CLI de terceros: no se verificó una CLI independiente de Grok Bot.
 
-### Servicios
-| # | Herramienta | Para qué |
-|---|---|---|
-| 13 | Docker Desktop | Contenedores (necesario para Supabase local) |
-| 14 | mongosh | Cliente de MongoDB |
-| 15 | Ollama | Modelos de IA locales (Llama, Mistral, Gemma) |
-| 16 | FFmpeg | Procesamiento de audio y video |
+**Gemini CLI:** Google retiró el acceso de las cuentas personales e indica migrar a Antigravity. Por eso `agy` es la opción normal y Gemini CLI queda como selección de compatibilidad, con aviso. [Fuente oficial](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals).
 
-### Deploy y seguridad
-| # | Herramienta | Para qué |
-|---|---|---|
-| 17 | Netlify CLI | Deploy de frontends y sitios estáticos |
-| 18 | Vercel CLI | Deploy de apps Next.js y React |
-| 19 | Supabase CLI | PostgreSQL, auth, storage y edge functions |
-| 20 | Snyk CLI | Scanner de vulnerabilidades en dependencias |
+## Python actualizable, con entornos separados
 
-### Skills de Claude Code
-| # | Herramienta | Para qué |
-|---|---|---|
-| 21 | Skills | Pack de la Forja (skills del autor, con crédito) + oficiales de Anthropic (skill-creator, docx, pdf, xlsx, pptx) |
+- El modo 2 comprueba todas las ramas WinGet contempladas (3.10 a 3.15), sin detenerse en la primera instalada.
+- La rama para instalaciones nuevas de este catálogo es **3.14**, verificada en WinGet. No se presenta como la última versión de Python.org.
+- Si ya tenés otra rama, podés agregar 3.14 en paralelo. No se eliminan versiones, se migra Conda ni se reinstalan los paquetes compartidos.
+- Las cinco librerías base viven en `%LOCALAPPDATA%\Forja\Python\venv`.
+- Flask, OpenCV y NumPy tienen un perfil opcional separado en `%LOCALAPPDATA%\Forja\Python\web-vision`.
+- Se comprueban aislamiento, `pip check`, presencia e imports. Los proyectos conservan sus venvs; actualizar el intérprete no los migra automáticamente.
 
-### Vinculaciones
-| # | Herramienta | Para qué |
-|---|---|---|
-| 22 | Asistente de conexión | Conecta GitHub CLI, Claude MCP, Netlify, Vercel, Supabase, Snyk y Docker con tu cuenta |
+Para un proyecto nuevo con una rama específica: `py -3.14 -m venv .venv`. Revisá sus dependencias y lockfile antes de cambiar la rama de un proyecto existente.
 
----
+## Frontend y servicios por proyecto
 
-## Qué hace el paso 22 en particular
+React, TypeScript, Vite y Tailwind se instalan dentro de cada proyecto. Forja muestra cómo empezar, sin agregar paquetes globales que cambien proyectos existentes. PWA y extensiones Chrome son tipos de proyecto; PostGIS requiere componentes compatibles con PostgreSQL y habilitación en la base elegida.
 
-El asistente de vinculación verifica y conecta cada servicio:
+Wrangler sigue la recomendación de Cloudflare de usar una dependencia de desarrollo local: al elegirlo en modo 1, pide una ruta absoluta con `package.json` y una segunda confirmación. npm modifica los archivos de dependencias solo allí. El modo 2 no recorre ni altera todos tus proyectos. Para actualizar Wrangler, volvé a elegir ese proyecto desde el modo 1. [Documentación de Cloudflare](https://developers.cloudflare.com/workers/wrangler/install-and-update/).
 
-- **GitHub CLI** → `gh auth login` (navegador)
-- **Claude MCP GitHub** → opcional, con guía para configurar manualmente el servidor mantenido por GitHub y limitar sus permisos; la Forja no solicita ni guarda un PAT
-- **Netlify** → `netlify login` (navegador)
-- **Vercel** → `vercel login` (navegador o email)
-- **Supabase** → `supabase login` (navegador)
-- **Snyk** → login por navegador con OAuth; verificación mediante `snyk whoami --experimental` (si no se puede verificar, queda pendiente)
-- **Docker** → verifica que Docker Desktop esté corriendo
+## Cómo se actualizan las herramientas
 
-Si detecta una conexión válida, la marca como OK. Las conexiones que no puede verificar quedan pendientes; el MCP manual se muestra como opcional.
+- WinGet usa ID exacto y fuente explícita; se comprueba el registro después de instalar las entradas nuevas del catálogo.
+- Las CLI npm usan el paquete oficial, una versión concreta consultada al registro y comprobación de la CLI. Se evita iniciar una segunda instalación si se detecta otra vía.
+- Cursor Agent, Render y Supabase nativos usan ZIP Windows x64 y SHA-256 revisados. Se validan rutas/enlaces del ZIP antes de extraer y se verifica la versión antes de publicar el directorio. No se ejecutan los scripts remotos de bootstrap.
+- Esos ZIP quedan en `%LOCALAPPDATA%\Forja\Tools\<id>\<version>`. El BAT muestra el comando completo de su launcher. No cambia el PATH persistente ni borra versiones anteriores; una revisión nueva de estos paquetes requiere actualizar el catálogo de Forja.
+- La app ChatGPT/Codex se instala por el ID oficial de Microsoft Store; sus actualizaciones se delegan a Store y aparecen como saltadas, con explicación, en el modo 2.
+- Los JDK de Scoop y un rustup externo se reconocen para evitar duplicarlos. Su actualización queda pendiente con indicación de usar el gestor original. Los toolchains Rust, SDK Android y workloads de Build Tools requieren gestión propia.
+- Supabase existente por npm se conserva. Una instalación nueva usa el ZIP nativo; se eliminó el fallback de instalación npm global. No se desinstala la copia de Scoop ni se cambia automáticamente el PATH.
 
----
+Si una instalación no puede comprobarse, aparece como pendiente o error. Las versiones de servicios y paquetes pueden cambiar entre ejecuciones; esto no es una imagen exacta de una PC.
 
-## Skills de Claude Code (paso 21)
+## Seguridad, respaldo y validación
 
-Una skill le enseña a Claude Code una capacidad nueva, y se carga **solo cuando se usa** — por eso ahorra tokens frente a instrucciones permanentes. El paso 21 ofrece dos packs, cada uno opcional:
+La Forja mantiene el guard contra elevación global, confirmaciones, temporales propios, validación de reparse points, skills por SHA y verificación del MSI de reparación de mongosh. No desactiva SmartScreen, antivirus ni políticas de ejecución.
 
-**Pack de la Forja** — skills desarrolladas por el autor ([detalle en `skills/`](skills/README.md)). Al instalarlas elegís:
-1. **Tal cual están**, con el agradecimiento al autor en cada archivo, o
-2. **Personalizadas**: se agrega tu nombre como adaptador.
+No contiene credenciales ni respalda proyectos, bases de datos o volúmenes Docker. Antes de formatear, guardá y verificá esos datos por separado. El inventario personal de una PC no forma parte de este repositorio público.
 
-En ambos casos **el crédito del desarrollador original se conserva** — es la única condición de uso.
-
-**Oficiales de Anthropic** — `skill-creator`, `docx`, `pdf`, `xlsx`, `pptx`. Se descargan por una revisión fija del repo oficial [anthropics/skills](https://github.com/anthropics/skills) (no se redistribuyen desde acá).
-
-Las skills existentes en tu `~/.claude/skills` **se conservan**: si ya tenés una con el mismo
-nombre, se saltea. Las nuevas se preparan fuera de esa carpeta y se mueven al completar la copia.
-Se rechazan enlaces y junctions en las rutas. El script muestra los SHA utilizados y no ejecuta
-el contenido descargado. Revisá las instrucciones antes de habilitarlas en Claude.
-
----
-
-## Requisitos
-
-- Windows 10/11
-- Conexión a internet
-- Cuenta en GitHub (para el paso de vinculación)
-- Cuentas opcionales: Netlify, Vercel, Supabase, Snyk
-
----
-
-## Notas
-
-- Algunos pasos instalan programas que necesitan **reiniciar la terminal o la PC** para que el PATH se actualice. El script te avisa cuándo. Podés volver a correrlo después del reinicio para completar los pasos pendientes.
-- Docker Desktop requiere reiniciar la PC después de instalarse.
-- El setup puede instalar paquetes y configurar tu identidad Git. El modo actualización modifica versiones existentes; la limpieza opcional de Claude usa únicamente el desinstalador de npm, con confirmación.
-- El MCP antiguo por NPX ya no se configura. Si lo instalaste antes, seguí la migración de [SECURITY.md](SECURITY.md).
-
----
-
-## Actualizar tus herramientas
-
-Corré el script y elegí el modo **[2] Solo actualizar**. Recorre las herramientas instaladas y las actualiza:
-
-- **winget**: PowerShell 7, Git, Node.js, pnpm, Python, VS Code, Claude Desktop, GitHub CLI, Docker, mongosh, Ollama, FFmpeg, Supabase CLI
-- **Claude Code CLI**: su propio comando `claude update`
-- **npm**: Netlify CLI, Vercel CLI y Snyk CLI, consultando e instalando una versión concreta
-- **WSL** y **librerías Python**, estas últimas únicamente dentro de `%LOCALAPPDATA%\Forja\Python\venv`
-
-Lo que no está instalado se saltea sin preguntar. Al final muestra un resumen: actualizados / ya al día / saltados / con errores.
-
-> Tip: cerrá VS Code y Docker antes de actualizar — un programa abierto puede bloquear su propia actualización.
-
-**PowerShell 7** se actualiza en la misma ventana: el lanzador usa Windows PowerShell 5.1. Cerrá otras sesiones de PowerShell 7 si el instalador avisa que está en uso.
-
-**Caso especial — doble instalación de Claude Code**: si detecta que tenés Claude Code instalado dos veces (npm global + instalador nativo), te ofrece eliminar la npm y quedarte solo con la nativa (la recomendada por Anthropic). Requiere cerrar todas las sesiones de Claude Code primero — el script te lo avisa y pide confirmación.
-
-Para actualizar **el script en sí**, descargá la última versión de este repo.
-
----
+Leé [SECURITY.md](SECURITY.md), [el detalle de v6.2.0](docs/STACK-IA-v6.2.0.md) y [la auditoría inicial](docs/AUDITORIA-SEGURIDAD-v6.1.md). CI ejecuta pruebas simuladas en PowerShell 5.1 y 7. La descarga, extracción y respuesta de versión de las tres CLI ZIP se comprobaron bajo un directorio de prueba; la instalación completa de todos los proveedores, logins y reinicios en una VM limpia siguen siendo verificaciones separadas.
 
 ## Historial de versiones
 
 | Versión | Cambios |
 |---|---|
+| v6.2.0 | Stack de agentes y servicios seleccionable; actualizaciones Python por rama; Flask/OpenCV aislados; Wrangler por proyecto; CLI nativas con ZIP y SHA revisados. [Detalle](docs/STACK-IA-v6.2.0.md) |
 | v6.1.3 | Reparación opcional de mongosh mediante su MSI oficial verificado y UAC limitado al instalador; validación de versión registrada y ejecutable; los avisos del Python compartido no se repiten cuando el entorno de Forja ya existe. Reparación real confirmada en 2.14.0. [Detalle](docs/CORRECCION-v6.1.3.md) |
 | v6.1.2 | Corrige los contadores del resumen; aísla las librerías Python de Forja y verifica dependencias/imports; distingue avisos npm de fallos y verifica las CLIs; muestra el diagnóstico MSI de mongosh y evita reintentos de fallos conocidos sin confirmación. [Detalle](docs/CORRECCION-v6.1.2.md) |
 | v6.1.1 | Corrige la segunda pasada de WinGet, muestra versiones instaladas, reconoce PowerShell desde el inventario general, usa ejecutables `.exe`/`.cmd` para CLIs npm y continúa ante una limpieza fallida de Claude. Agrega pruebas nativas bajo política Restricted. [Detalle](docs/CORRECCION-v6.1.1.md) |

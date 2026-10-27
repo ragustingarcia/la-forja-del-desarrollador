@@ -42,7 +42,8 @@ function Invoke-ForjaPython { param([string]$Executable)
     throw 'Invocacion Python inesperada'
 }
 function New-FixtureVenv {
-    $path=Join-Path $env:LOCALAPPDATA 'Forja\Python\venv'
+    $relative='Forja\Python\venv';if($script:case -eq 'web-vision'){$relative='Forja\Python\web-vision'}
+    $path=Join-Path $env:LOCALAPPDATA $relative
     [IO.Directory]::CreateDirectory((Join-Path $path 'Scripts')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $path 'Scripts\python.exe'),'inert fixture')
     $isolated='false';if ($script:case -eq 'system-site-packages') { $isolated='true' }
@@ -53,12 +54,13 @@ $sandbox=Join-Path ([IO.Path]::GetTempPath()) ('forja-python-'+[guid]::NewGuid()
 $previous=$env:LOCALAPPDATA
 $passed=0
 try {
-    foreach($case in @('healthy','shared-conflict','install-failure','dependency-conflict','import-failure','system-site-packages','new-environment','decline','incomplete','no-python')) {
+    foreach($case in @('healthy','shared-conflict','install-failure','dependency-conflict','import-failure','system-site-packages','new-environment','decline','incomplete','no-python','web-vision')) {
         $env:LOCALAPPDATA=Join-Path $sandbox $case
         $script:calls=@();$script:installed=$false
-        if ($case -in @('healthy','shared-conflict','install-failure','dependency-conflict','import-failure','system-site-packages')) { New-FixtureVenv }
+        if ($case -in @('healthy','shared-conflict','install-failure','dependency-conflict','import-failure','system-site-packages','web-vision')) { New-FixtureVenv }
         if ($case -eq 'incomplete') { [IO.Directory]::CreateDirectory((Join-Path $env:LOCALAPPDATA 'Forja\Python\venv')) | Out-Null }
         if ($case -eq 'shared-conflict') { $result=@(Invoke-ForjaPythonLibraries -Update -CheckShared) }
+        elseif ($case -eq 'web-vision') { $result=@(Invoke-ForjaPythonLibraries -Update -Profile web-vision) }
         else { $result=@(Invoke-ForjaPythonLibraries -Update) }
         if ($result.Count -ne 1) { throw 'Python retorna salida adicional al estado' }
         $expected='aldia'
@@ -70,6 +72,11 @@ try {
         if ($case -eq 'healthy' -and @($script:calls | Where-Object { $_.Executable -eq 'C:\fixture\base-python.exe' -and $_.Arguments -contains 'check' }).Count) { throw 'Se inspecciono Python compartido sin pedir diagnostico' }
         if (@($script:calls | Where-Object { $_.Executable -eq 'C:\fixture\base-python.exe' -and $_.Arguments -contains 'install' }).Count) { throw 'Instalacion global detectada' }
         if ($case -in @('system-site-packages','incomplete','decline','no-python') -and @($script:calls | Where-Object {$_.Arguments -contains 'install'}).Count) { throw 'Se instalo en entorno no validado' }
+        if($case -eq 'web-vision'){
+            $install=@($script:calls | Where-Object {$_.Arguments -contains 'install'})[0]
+            if($install.Executable -notlike '*\web-vision\Scripts\python.exe' -or $install.Arguments -notcontains 'Flask' -or $install.Arguments -notcontains 'opencv-python' -or $install.Arguments -contains 'fastapi'){throw 'Perfil Flask/OpenCV fuera de su entorno separado'}
+            if(-not @($script:calls | Where-Object {$_.Arguments -contains 'import flask, cv2, numpy'}).Count){throw 'Falta verificar imports del perfil vision'}
+        }
         $passed++;Write-Host "PASS Python $case / $expected / sin pip install global"
     }
     Write-Host "RESULTADO PYTHON: $passed PASS / 0 FAIL"

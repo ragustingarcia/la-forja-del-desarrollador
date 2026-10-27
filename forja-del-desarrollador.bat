@@ -16,12 +16,12 @@ exit /b %FORJA_EXIT_CODE%
 
 # ============================================================
 #  FORJA DEL DESARROLLADOR
-#  Setup completo para desarrollar con Claude Code en Windows
+#  Stack para crear con agentes de IA en Windows
 #  by Rodolfo Agustin Garcia  |  ragustingarcia.com
 #  https://github.com/ragustingarcia/la-forja-del-desarrollador
 # ============================================================
 
-$VERSION = "v6.1.3"
+$VERSION = "v6.2.0"
 # Ni npm, ni skills, ni conexiones deben heredar privilegios de administrador.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -70,8 +70,18 @@ function Test-NpmPkg { param($pkg)
     return $false
 }
 function Get-ForjaToolPath { param(
-    [ValidateSet('npm','pnpm','claude','netlify','vercel','supabase','snyk')][string]$Name
+    [ValidateSet('npm','pnpm','claude','netlify','vercel','supabase','snyk','codex','gemini','neon','resend')][string]$Name
 )
+    # Para paquetes npm, elegir el shim de ese gestor antes que otra copia de Scoop.
+    if ($Name -in @('supabase','codex','gemini','neon','resend')) {
+        $npmShim=Join-Path $env:APPDATA ('npm\'+$Name+'.cmd')
+        if(Test-Path -LiteralPath $npmShim -PathType Leaf){return $npmShim}
+    }
+    if ($Name -eq 'supabase') {
+        $managed=Get-ForjaStackCatalog | Where-Object Id -eq 'supabase-native'
+        $launcher=Join-Path (Get-ForjaManagedRoot $managed) $managed.Launcher
+        if(Test-Path -LiteralPath $launcher -PathType Leaf){return $launcher}
+    }
     # Especificar extension evita que PowerShell seleccione el shim .ps1 bloqueado.
     foreach ($extension in @('.exe','.cmd')) {
         $command = Get-Command ($Name + $extension) -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -310,7 +320,7 @@ function Test-SnykAuth {
 
 
 function Test-NpmRuntime { param([string]$Package,[string]$Version)
-    $commands=@{ 'netlify-cli'='netlify'; 'vercel'='vercel'; 'snyk'='snyk'; 'supabase'='supabase'; '@anthropic-ai/claude-code'='claude'; 'pnpm'='pnpm' }
+    $commands=@{ 'netlify-cli'='netlify'; 'vercel'='vercel'; 'snyk'='snyk'; 'supabase'='supabase'; '@anthropic-ai/claude-code'='claude'; 'pnpm'='pnpm'; '@openai/codex'='codex'; '@google/gemini-cli'='gemini'; 'neon'='neon'; 'resend-cli'='resend' }
     if (-not $commands.ContainsKey($Package)) { return $true }
     $output=Invoke-ForjaTool $commands[$Package] --version 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { return $false }
@@ -454,13 +464,14 @@ function Invoke-ForjaPython { param([string]$Executable)
     catch { Write-Warn "No se pudo ejecutar Python ($($_.Exception.GetType().Name))."; $code=-1 }
     $global:LASTEXITCODE=$code
 }
-function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShared)
+function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShared,[ValidateSet('base','web-vision')][string]$Profile='base')
     $result=[pscustomobject]@{ State='error'; SharedConflict=$false; Environment=$null }
     $base=Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $base) { Write-Warn 'Python no disponible.'; $result.State='saltado'; return $result }
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { Write-Warn 'LOCALAPPDATA no disponible.'; return $result }
-    $expectedVenv=Join-Path $env:LOCALAPPDATA 'Forja\Python\venv'
-    if ($CheckShared -or -not (Test-Path -LiteralPath $expectedVenv)) {
+    $venvName='venv';if($Profile -eq 'web-vision'){$venvName='web-vision'}
+    $expectedVenv=Join-Path $env:LOCALAPPDATA ('Forja\Python\'+$venvName)
+    if ($CheckShared -or ($Profile -eq 'base' -and -not (Test-Path -LiteralPath $expectedVenv))) {
         $shared=Invoke-ForjaPython $base.Source -m pip check 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) {
             $result.SharedConflict=$true
@@ -470,7 +481,7 @@ function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShare
     }
     try {
         if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible' }
-        $venv=Join-Path $env:LOCALAPPDATA 'Forja\Python\venv'
+        $venv=$expectedVenv
         $result.Environment=$venv
         Assert-NoReparsePath $venv
         $python=Join-Path $venv 'Scripts\python.exe'
@@ -490,17 +501,21 @@ function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShare
         $null=$before | ConvertFrom-Json -ErrorAction Stop
         $installArguments=@('-m','pip','install','--disable-pip-version-check')
         if ($Update) { $installArguments+='--upgrade' }
-        $installArguments+=@('fastapi','uvicorn[standard]','python-multipart','pdfplumber','requests')
+        $packages=@('fastapi','uvicorn[standard]','python-multipart','pdfplumber','requests')
+        $packageNames=@('fastapi','uvicorn','python-multipart','pdfplumber','requests')
+        $imports='import fastapi, uvicorn, multipart, pdfplumber, requests'
+        if($Profile -eq 'web-vision'){$packages=@('Flask','opencv-python','numpy');$packageNames=@('Flask','opencv-python','numpy');$imports='import flask, cv2, numpy'}
+        $installArguments+=$packages
         Invoke-ForjaPython $python @installArguments 2>&1 | ForEach-Object { Write-Host "  $_" }
         if ($LASTEXITCODE -ne 0) { throw 'pip no pudo instalar las librerias' }
         $check=Invoke-ForjaPython $python -m pip check 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) { Write-Warn $check.Trim(); throw 'Las dependencias del entorno no son compatibles' }
-        $null=Invoke-ForjaPython $python -m pip show fastapi uvicorn python-multipart pdfplumber requests 2>&1
+        $null=Invoke-ForjaPython $python -m pip show @packageNames 2>&1
         if ($LASTEXITCODE -ne 0) { throw 'Faltan librerias requeridas' }
         $after=Invoke-ForjaPython $python -m pip list --format=json --disable-pip-version-check 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) { throw 'No se pudo verificar la version instalada' }
         $null=$after | ConvertFrom-Json -ErrorAction Stop
-        $imports=Invoke-ForjaPython $python -c 'import fastapi, uvicorn, multipart, pdfplumber, requests' 2>&1 | Out-String
+        $imports=Invoke-ForjaPython $python -c $imports 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) { Write-Warn $imports.Trim(); throw 'Las librerias no se pueden cargar en ese interprete' }
         $result.State='ok'
         if ($before.Trim() -eq $after.Trim()) { $result.State='aldia' }
@@ -508,6 +523,678 @@ function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShare
         Write-Dim "Para usarlas, ejecuta ese Python directamente; no hace falta activar scripts de PowerShell."
     } catch { Write-Warn "Librerias Python: $($_.Exception.Message)."; $result.State='error' }
     return $result
+}
+
+function Invoke-WingetUpdate { param($id, $nombre)
+    $info = Get-WingetPackageInfo $id
+    if ($info.State -eq 'absent') { Write-Dim "$nombre no figura en el inventario de WinGet. Saltado."; return 'saltado' }
+    if ($info.State -ne 'installed') { Write-Warn "${nombre}: $($info.Detail)"; return 'error' }
+    if (-not $info.Available) { Write-OK "$nombre ya esta al dia (instalada: $($info.Version))."; return 'aldia' }
+    Write-Info "$nombre : instalada $($info.Version) -> disponible $($info.Available)"
+    if ($id -eq 'MongoDB.Shell' -and (Test-MongoshBusy)) {
+        Write-Warn 'mongosh esta abierto. Cerra sus sesiones y volve a actualizarlo; no se cierran procesos automaticamente.'
+        return 'pendiente'
+    }
+    if ($id -eq 'MongoDB.Shell') {
+        $previousFailure=Get-MongoshPreviousFailure $info.Available
+        if ($previousFailure) {
+            Write-Warn "El ultimo intento de esta version fallo con MSI 1304 al escribir archivos. Log: $previousFailure"
+            Write-Info 'La reparacion usa solo el MSI oficial con SHA-256 y firma verificados. Puede pedir UAC para ese paquete.'
+            if (Ask-SN 'Reparar mongosh con Windows Installer y permisos para este paso?') { return (Invoke-MongoshRepair $info.Available) }
+            return 'pendiente'
+        }
+    }
+    $installerOutput=New-Object 'System.Collections.Generic.List[string]'
+    try {
+        winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { $installerOutput.Add($_.ToString()); Write-Host "  $_" }
+        $codigo = $LASTEXITCODE
+    } catch { Write-Warn "${nombre}: no se pudo iniciar la actualizacion."; return 'error' }
+    if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre sin actualizacion aplicable (instalada: $($info.Version))."; return 'aldia' }
+    if ($codigo -eq 0) {
+        $script:ForjaWingetInventory = $null
+        $after = Get-WingetPackageInfo $id
+        if ($after.State -eq 'installed' -and $after.Version -eq $info.Available) {
+            Write-OK "$nombre actualizado. Version instalada: $($after.Version)."; return 'ok'
+        }
+        Write-Warn "$nombre : el instalador termino, pero no se pudo confirmar la version esperada. Volve a verificar."
+        return 'error'
+    }
+    $detail=Get-InstallerFailureDetail ($installerOutput -join "`n")
+    Write-Warn "${nombre}: fallo WinGet $codigo. $detail"
+    if ($id -eq 'MongoDB.Shell' -and $detail -match 'MSI 1304') {
+        if (Ask-SN 'Intentar reparacion con el MSI oficial verificado y UAC solo para este paquete?') { return (Invoke-MongoshRepair $info.Available) }
+        return 'pendiente'
+    }
+    return 'error'
+}
+
+# Actualiza un paquete npm global solo si la version instalada
+# difiere de la ultima publicada (evita reinstalaciones de minutos)
+function Invoke-NpmUpdate { param($pkg, $nombre)
+    $vLocal = $null
+    $lista = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String
+    if ($LASTEXITCODE -ne 0) { Write-Warn "${nombre}: fallo la consulta local de npm."; return 'error' }
+    if ($lista -match ([regex]::Escape($pkg) + "@(\S+)")) { $vLocal = $Matches[1] }
+    $vUltima = ((Invoke-ForjaTool npm view $pkg version 2>&1) | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $vUltima -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') {
+        Write-Warn "${nombre}: no se pudo consultar una version valida del registro."; return 'error'
+    }
+    if ($vLocal -and $vUltima -and $vLocal -eq $vUltima) {
+        if (-not (Test-NpmRuntime $pkg $vLocal)) { Write-Warn "${nombre}: la version figura instalada pero el comando no responde correctamente."; return 'error' }
+        Write-OK "$nombre ya esta al dia ($vLocal)."
+        return "aldia"
+    }
+    Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+    $npmOutput=New-Object 'System.Collections.Generic.List[string]'
+    Invoke-ForjaTool npm install -g "$pkg@$vUltima" 2>&1 | ForEach-Object { $npmOutput.Add($_.ToString()); Write-Host "  $_" }
+    $codigo = $LASTEXITCODE
+    Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+    if ($codigo -eq 0) {
+        $after = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String
+        if ($LASTEXITCODE -eq 0 -and $after -match ([regex]::Escape($pkg) + '@(\S+)') -and $Matches[1] -eq $vUltima) {
+            if (-not (Test-NpmRuntime $pkg $vUltima)) { Write-Warn "${nombre}: paquete actualizado pero la CLI no responde con esa version."; return 'error' }
+            Write-OK "$nombre actualizado y comando verificado. Version instalada: $vUltima."
+            if (($npmOutput -join "`n") -match '(?im)^npm warn') {
+                Write-Warn 'npm emitio avisos del proveedor. La CLI responde; revisa esos avisos. No se cambia la politica de scripts.'
+                return 'ok-aviso'
+            }
+            return 'ok'
+        }
+        Write-Warn "${nombre}: npm termino pero no se confirmo la version esperada."; return 'error'
+    }
+    Write-Warn "${nombre}: error al actualizar."
+    return "error"
+}
+function Add-UpdResultado { param($r)
+    switch ($r) {
+        "ok"    { $script:updOK++ }
+        "aldia" { $script:updAlDia++ }
+        "error" { $script:updError++ }
+        "saltado" { $script:updSaltado++ }
+        "pendiente" { $script:updPendiente++ }
+        "ok-aviso" { $script:updOK++; $script:updAvisos++ }
+        "aviso" { $script:updAvisos++ }
+    }
+}
+
+
+function Get-ForjaStackCatalog {
+    $json=@'
+[
+  {
+    "Id": "cursor",
+    "Group": "Editores y agentes",
+    "Name": "Cursor",
+    "Method": "winget",
+    "Package": "Anysphere.Cursor",
+    "Command": "cursor",
+    "Docs": "https://cursor.com/downloads"
+  },
+  {
+    "Id": "antigravity",
+    "Group": "Editores y agentes",
+    "Name": "Antigravity App",
+    "Method": "winget",
+    "Package": "Google.Antigravity",
+    "Command": "antigravity",
+    "Docs": "https://antigravity.google/download"
+  },
+  {
+    "Id": "antigravity-ide",
+    "Group": "Editores y agentes",
+    "Name": "Antigravity IDE",
+    "Method": "winget",
+    "Package": "Google.AntigravityIDE",
+    "Command": "antigravity-ide",
+    "Docs": "https://antigravity.google/download"
+  },
+  {
+    "Id": "gemini-app",
+    "Group": "Editores y agentes",
+    "Name": "Gemini Desktop",
+    "Method": "winget",
+    "Package": "Google.GeminiDesktop",
+    "Command": "",
+    "Docs": "https://gemini.google/"
+  },
+  {
+    "Id": "grok-bot",
+    "Group": "Editores y agentes",
+    "Name": "Grok Bot",
+    "Method": "winget",
+    "Package": "xAI.GrokBot",
+    "Command": "",
+    "Docs": "https://docs.x.ai/grok-bot/get-started"
+  },
+  {
+    "Id": "codex-app",
+    "Group": "Editores y agentes",
+    "Name": "App ChatGPT / Codex",
+    "Method": "store",
+    "Package": "9PLM9XGG6VKS",
+    "Appx": "OpenAI.Codex",
+    "Command": "",
+    "Docs": "https://learn.chatgpt.com/docs/app/windows"
+  },
+  {
+    "Id": "codex-cli",
+    "Group": "CLI de agentes",
+    "Name": "Codex CLI",
+    "Method": "npm",
+    "Package": "@openai/codex",
+    "Command": "codex",
+    "Docs": "https://learn.chatgpt.com/docs/codex/cli"
+  },
+  {
+    "Id": "agy-cli",
+    "Group": "CLI de agentes",
+    "Name": "Antigravity CLI (agy)",
+    "Method": "winget",
+    "Package": "Google.AntigravityCLI",
+    "Command": "agy",
+    "Docs": "https://antigravity.google/docs/getting-started"
+  },
+  {
+    "Id": "cursor-cli",
+    "Group": "CLI de agentes",
+    "Name": "Cursor Agent CLI (Windows x64)",
+    "Method": "archive",
+    "Command": "agent",
+    "Version": "2026.10.22-27dcf5f",
+    "Uri": "https://downloads.cursor.com/lab/2026.10.22-27dcf5f/windows/x64/agent-cli-package.zip",
+    "Sha256": "864A8F6A22F8C5EBEDEF8E0CEBA529EAE9A59B3D7F6FCCB75E43E0F5EFC3C147",
+    "Executable": "dist-package/node.exe",
+    "Script": "dist-package/index.js",
+    "Launcher": "forja-agent.cmd",
+    "Docs": "https://prod.cursor.com/docs/cli/installation"
+  },
+  {
+    "Id": "gemini-cli",
+    "Group": "Gemini CLI (compatibilidad)",
+    "Name": "Gemini CLI (cuentas compatibles)",
+    "Method": "npm",
+    "Package": "@google/gemini-cli",
+    "Command": "gemini",
+    "Notice": "Google retiro el acceso de cuentas personales a Gemini CLI. Preferi agy; revisa tu tipo de cuenta antes de instalar Gemini CLI.",
+    "Docs": "https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals"
+  },
+  {
+    "Id": "neon-cli",
+    "Group": "Servicios cloud",
+    "Name": "Neon CLI",
+    "Method": "npm",
+    "Package": "neon",
+    "Command": "neon",
+    "Docs": "https://neon.com/docs/cli/install"
+  },
+  {
+    "Id": "resend-cli",
+    "Group": "Servicios cloud",
+    "Name": "Resend CLI",
+    "Method": "npm",
+    "Package": "resend-cli",
+    "Command": "resend",
+    "Docs": "https://resend.com/docs/cli"
+  },
+  {
+    "Id": "render-cli",
+    "Group": "Servicios cloud",
+    "Name": "Render CLI (Windows x64)",
+    "Method": "archive",
+    "Command": "render",
+    "Version": "2.33.0",
+    "Uri": "https://github.com/render-oss/cli/releases/download/v2.33.0/cli_2.33.0_windows_amd64.zip",
+    "Sha256": "7A16D74C9F18AC9A1383D9A3A43C3C07B4374DBDDB183F49A05810C130B5CA16",
+    "Executable": "render.exe",
+    "Script": "",
+    "Launcher": "forja-render.cmd",
+    "Docs": "https://render.com/docs/cli"
+  },
+  {
+    "Id": "cloudflared",
+    "Group": "Servicios cloud",
+    "Name": "Cloudflare Tunnel CLI",
+    "Method": "winget",
+    "Package": "Cloudflare.cloudflared",
+    "Command": "cloudflared",
+    "Docs": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+  },
+  {
+    "Id": "wrangler",
+    "Group": "Servicios cloud",
+    "Name": "Cloudflare Wrangler (por proyecto)",
+    "Method": "project-npm",
+    "Package": "wrangler",
+    "Command": "wrangler",
+    "Docs": "https://developers.cloudflare.com/workers/wrangler/install-and-update/"
+  },
+  {
+    "Id": "postgresql",
+    "Group": "Bases de datos locales",
+    "Name": "PostgreSQL 17 (servidor y cliente)",
+    "Method": "winget",
+    "Package": "PostgreSQL.PostgreSQL.17",
+    "Command": "psql",
+    "Docs": "https://www.postgresql.org/download/windows/"
+  },
+  {
+    "Id": "rust",
+    "Group": "Compilacion y escritorio",
+    "Name": "Rust / Cargo (rustup)",
+    "Method": "winget",
+    "Package": "Rustlang.Rustup",
+    "Command": "rustup",
+    "Notice": "WinGet gestiona rustup. Los toolchains se actualizan por separado con rustup update, segun cada proyecto.",
+    "Docs": "https://www.rust-lang.org/tools/install"
+  },
+  {
+    "Id": "buildtools",
+    "Group": "Compilacion y escritorio",
+    "Name": "Visual Studio Build Tools 2022",
+    "Method": "winget",
+    "Package": "Microsoft.VisualStudio.2022.BuildTools",
+    "Command": "",
+    "Notice": "El instalador permite elegir workloads. Revisa C++ y Windows SDK para Tauri o extensiones nativas; no se marcan como instalados solo por tener Build Tools.",
+    "Docs": "https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022"
+  },
+  {
+    "Id": "dotnet",
+    "Group": "Compilacion y escritorio",
+    "Name": ".NET SDK 10",
+    "Method": "winget",
+    "Package": "Microsoft.DotNet.SDK.10",
+    "Command": "dotnet",
+    "Docs": "https://dotnet.microsoft.com/download"
+  },
+  {
+    "Id": "inno",
+    "Group": "Compilacion y escritorio",
+    "Name": "Inno Setup",
+    "Method": "winget",
+    "Package": "JRSoftware.InnoSetup",
+    "Command": "ISCC",
+    "Docs": "https://jrsoftware.org/isinfo.php"
+  },
+  {
+    "Id": "android",
+    "Group": "Android y Java",
+    "Name": "Android Studio",
+    "Method": "winget",
+    "Package": "Google.AndroidStudio",
+    "Command": "",
+    "Notice": "SDK, emuladores y plataformas Android se eligen despues desde SDK Manager.",
+    "Docs": "https://developer.android.com/studio"
+  },
+  {
+    "Id": "jdk17",
+    "Group": "Android y Java",
+    "Name": "Temurin JDK 17",
+    "Method": "winget",
+    "Package": "EclipseAdoptium.Temurin.17.JDK",
+    "Command": "java",
+    "Docs": "https://adoptium.net/installation/",
+    "Scoop": "temurin17-jdk"
+  },
+  {
+    "Id": "jdk21",
+    "Group": "Android y Java",
+    "Name": "Temurin JDK 21",
+    "Method": "winget",
+    "Package": "EclipseAdoptium.Temurin.21.JDK",
+    "Command": "java",
+    "Notice": "JDK 17 y 21 pueden convivir. JAVA_HOME y el JDK de Gradle se eligen por proyecto.",
+    "Docs": "https://adoptium.net/installation/",
+    "Scoop": "temurin21-jdk"
+  },
+  {
+    "Id": "miniforge",
+    "Group": "Python cientifico",
+    "Name": "Miniforge3",
+    "Method": "winget",
+    "Package": "CondaForge.Miniforge3",
+    "Command": "conda",
+    "Notice": "Forja gestiona el instalador de Miniforge, no modifica ni migra sus entornos Conda.",
+    "Docs": "https://github.com/conda-forge/miniforge"
+  },
+  {
+    "Id": "python-web-vision",
+    "Group": "Python cientifico",
+    "Name": "Flask + OpenCV + NumPy (venv aislado)",
+    "Method": "python-venv",
+    "Command": "",
+    "Docs": "https://docs.python.org/3/library/venv.html"
+  },
+  {
+    "Id": "supabase-native",
+    "Group": "Base",
+    "Core": true,
+    "Name": "Supabase CLI (Windows x64)",
+    "Method": "archive",
+    "Command": "supabase",
+    "Version": "2.122.0",
+    "Uri": "https://github.com/supabase/cli/releases/download/v2.122.0/supabase_2.122.0_windows_amd64.zip",
+    "Sha256": "60031FD5BF050FC12A0C6AEF68997600D143870F944BF13109C7765DCA329AF8",
+    "Executable": "supabase.exe",
+    "Script": "",
+    "Launcher": "forja-supabase.cmd",
+    "Docs": "https://supabase.com/docs/guides/local-development/cli/getting-started"
+  }
+]
+'@
+    $entries=ConvertFrom-Json -InputObject $json
+    foreach($entry in $entries){Write-Output $entry}
+}
+function Invoke-ForjaCommand { param([string]$Path,[string[]]$Arguments)
+    $ErrorActionPreference='Continue'
+    try { & $Path @Arguments 2>&1 | ForEach-Object { $_.ToString() }; $code=$LASTEXITCODE }
+    catch { Write-Warn "No se pudo ejecutar $Path ($($_.Exception.GetType().Name))."; $code=-1 }
+    $global:LASTEXITCODE=$code
+}
+function Get-ForjaStackCommand { param([string]$Name)
+    if ($Name -notmatch '^[a-zA-Z0-9-]+$') { return $null }
+    foreach($extension in @('.exe','.cmd')) {
+        $command=Get-Command ($Name+$extension) -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($command) { return $command.Source }
+    }
+    foreach($relative in @(".local\bin\$Name.exe",".local\bin\$Name.cmd")) {
+        $path=Join-Path $env:USERPROFILE $relative
+        if(Test-Path -LiteralPath $path -PathType Leaf){return $path}
+    }
+    if($Name -eq 'agent'){
+        $path=Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.cmd'
+        if(Test-Path -LiteralPath $path -PathType Leaf){return $path}
+    }
+    return $null
+}
+function Get-ForjaManagedRoot { param($Tool)
+    if ($Tool.Id -notmatch '^[a-z0-9-]+$' -or $Tool.Version -notmatch '^[0-9][0-9.a-z-]+$') { throw 'Identidad de herramienta invalida.' }
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA no disponible.' }
+    $root=Join-Path $env:LOCALAPPDATA ("Forja\Tools\"+$Tool.Id+'\'+$Tool.Version)
+    Assert-NoReparsePath $root
+    return $root
+}
+function Save-ForjaToolArchive { param($Tool,[string]$Destination)
+    $approved=@(Get-ForjaStackCatalog | Where-Object { $_.Method -eq 'archive' -and $_.Id -eq $Tool.Id -and $_.Uri -ceq $Tool.Uri -and $_.Sha256 -ceq $Tool.Sha256 })
+    if ($approved.Count -ne 1) { throw 'Paquete fuera del catalogo revisado.' }
+    Invoke-WebRequest -Uri $Tool.Uri -OutFile $Destination -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop | Out-Null
+}
+function Expand-ForjaToolArchive { param([IO.Stream]$Stream,[string]$Destination)
+    Add-Type -AssemblyName System.IO.Compression
+    $zip=New-Object IO.Compression.ZipArchive($Stream,[IO.Compression.ZipArchiveMode]::Read,$true)
+    try {
+        $seen=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        $total=[long]0
+        if ($zip.Entries.Count -gt 5000) { throw 'Demasiadas entradas ZIP.' }
+        # Validar TODAS las entradas antes de crear archivos o ejecutar el paquete.
+        foreach($entry in $zip.Entries){
+            $name=$entry.FullName.Replace('\','/')
+            $parts=$name.TrimEnd('/') -split '/'
+            if (-not $name -or $name.StartsWith('/') -or $parts -contains '..' -or $parts -contains '.' -or $parts -contains '' -or $name -match '[:*?"<>|\x00-\x1f]' -or @($parts | Where-Object {$_ -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$'}).Count -or @($parts | Where-Object {$_ -match '[. ]$'}).Count) { throw 'Ruta ZIP insegura.' }
+            if (-not $seen.Add($name.TrimEnd('/'))) { throw 'Ruta ZIP duplicada.' }
+            $attributes=[uint32]([int64]$entry.ExternalAttributes -band 0xffffffffL)
+            if (($attributes -band 0x400) -ne 0 -or (($attributes -shr 16) -band 0xf000) -eq 0xa000) { throw 'Enlace ZIP rechazado.' }
+            $total+=$entry.Length
+            if ($total -gt 1073741824) { throw 'ZIP supera el limite de expansion.' }
+        }
+        foreach($entry in $zip.Entries){
+            $path=Join-Path $Destination ($entry.FullName.Replace('/','\'))
+            $full=[IO.Path]::GetFullPath($path)
+            if (-not $full.StartsWith([IO.Path]::GetFullPath($Destination).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Escape de destino ZIP.' }
+            Assert-NoReparsePath $full
+            if($entry.FullName.EndsWith('/')){[IO.Directory]::CreateDirectory($full) | Out-Null;continue}
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($full)) | Out-Null
+            $entryStream=$entry.Open();$output=[IO.File]::Open($full,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+            try {$entryStream.CopyTo($output)} finally {$entryStream.Dispose();$output.Dispose()}
+        }
+    } finally {$zip.Dispose()}
+}
+function Test-ForjaManagedRuntime { param($Tool,[string]$Root)
+    $exe=Join-Path $Root $Tool.Executable
+    $arguments=@('--version')
+    if($Tool.Script){$arguments=@((Join-Path $Root $Tool.Script),'--version')}
+    Assert-NoReparsePath $exe
+    if(-not (Test-Path -LiteralPath $exe -PathType Leaf)){return $false}
+    if($Tool.Script){Assert-NoReparsePath $arguments[0];if(-not (Test-Path -LiteralPath $arguments[0] -PathType Leaf)){return $false}}
+    $version=Invoke-ForjaCommand $exe $arguments | Out-String
+    return ($LASTEXITCODE -eq 0 -and $version -match ('(?<![a-zA-Z0-9.])v?'+[regex]::Escape($Tool.Version)+'(?![a-zA-Z0-9.-])'))
+}
+function Invoke-ForjaArchiveTool { param($Tool,[switch]$Update)
+    if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { Write-Warn 'Este paquete revisado es Windows x64.'; return 'pendiente' }
+    $workspace=$null;$stream=$null
+    try {
+        $root=Get-ForjaManagedRoot $Tool
+        if(Test-Path -LiteralPath $root){
+            $receipt=Join-Path $root '.forja-tool.json'
+            if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { Write-Warn 'Directorio existente sin comprobante; no se reemplaza.';return 'pendiente' }
+            Assert-NoReparsePath $receipt
+            $record=Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($record.Id -cne $Tool.Id -or $record.Version -cne $Tool.Version -or $record.Sha256 -cne $Tool.Sha256) { Write-Warn 'Comprobante distinto del catalogo revisado.';return 'pendiente' }
+            if(-not (Test-ForjaManagedRuntime $Tool $root)){return 'error'}
+            Write-OK "$($Tool.Name): version revisada $($Tool.Version)."
+            Write-Dim ('Comando: '+(Join-Path $root $Tool.Launcher))
+            return 'aldia'
+        }
+        $external=Get-ForjaStackCommand $Tool.Command
+        if($external){Write-Warn "$($Tool.Name) instalado por otro medio: $external. Revisar con el actualizador del proveedor.";return 'pendiente'}
+        $parent=Split-Path $root -Parent
+        if($Update -and -not (Test-Path -LiteralPath $parent)){return 'saltado'}
+        if($Update){
+            $old=@(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Stop | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName '.forja-tool.json') -PathType Leaf })
+            if(-not $old.Count){return 'saltado'}
+        }
+        $workspace=New-ForjaWorkspace
+        $archive=Join-Path $workspace 'tool.zip';$stage=Join-Path $workspace 'payload'
+        Save-ForjaToolArchive $Tool $archive
+        Assert-NoReparsePath $archive
+        $stream=[IO.File]::Open($archive,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        if((Get-FileHash -InputStream $stream -Algorithm SHA256).Hash -cne $Tool.Sha256){throw 'SHA-256 del paquete no coincide.'}
+        $stream.Position=0
+        Expand-ForjaToolArchive $stream $stage
+        if(-not (Test-ForjaManagedRuntime $Tool $stage)){throw 'El paquete no confirma su version; no se publica.'}
+        # Shim propio: no usa el bootstrap del proveedor ni modifica politicas.
+        $relative=$Tool.Executable.Replace('/','\')
+        $launch='@echo off'+"`r`n"+'setlocal DisableDelayedExpansion'+"`r`n"+'"%~dp0'+$relative+'"'
+        if($Tool.Script){$launch+=' "%~dp0'+$Tool.Script.Replace('/','\')+'"'}
+        $launch+=' %*'+"`r`n"+'exit /b %ERRORLEVEL%'+"`r`n"
+        [IO.File]::WriteAllText((Join-Path $stage $Tool.Launcher),$launch,(New-Object Text.UTF8Encoding($false)))
+        @{Id=$Tool.Id;Version=$Tool.Version;Sha256=$Tool.Sha256} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage '.forja-tool.json') -Encoding UTF8
+        Assert-NoReparsePath $root
+        [IO.Directory]::CreateDirectory($parent) | Out-Null
+        [IO.Directory]::Move($stage,$root)
+        Write-OK "$($Tool.Name) $($Tool.Version): instalado y verificado."
+        Write-Info ('Ejecuta: '+(Join-Path $root $Tool.Launcher))
+        return 'ok'
+    } catch {Write-Warn "$($Tool.Name): $($_.Exception.Message)";return 'error'}
+    finally {if($stream){$stream.Dispose()};if($workspace){try{Remove-ForjaWorkspace $workspace}catch{Write-Dim "Temporal retenido: $workspace"}}}
+}
+function Invoke-ForjaCatalogNpm { param($Tool,[switch]$Update)
+    if(-not (Get-ForjaToolPath npm)){Write-Warn 'npm no disponible.';return 'pendiente'}
+    if(Test-NpmPkg $Tool.Package){return (Invoke-NpmUpdate $Tool.Package $Tool.Name)}
+    if(Get-ForjaStackCommand $Tool.Command){Write-Warn "$($Tool.Name) usa otro instalador. No se agrega una segunda copia.";return 'pendiente'}
+    if($Update){return 'saltado'}
+    $version=((Invoke-ForjaTool npm view $Tool.Package version | Out-String).Trim())
+    if($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$'){return 'error'}
+    Invoke-ForjaTool npm install -g ($Tool.Package+'@'+$version) 2>&1 | ForEach-Object {Write-Host "  $_"}
+    if($LASTEXITCODE -ne 0){return 'error'}
+    $after=Invoke-ForjaTool npm list -g $Tool.Package --depth=0 | Out-String
+    if($LASTEXITCODE -ne 0 -or $after -notmatch ([regex]::Escape($Tool.Package)+'@'+[regex]::Escape($version)+'(?![0-9A-Za-z.+-])')){return 'error'}
+    if(-not (Test-NpmRuntime $Tool.Package $version)){return 'error'}
+    Write-OK "$($Tool.Name) $version instalada y verificada."
+    return 'ok'
+}
+function Test-ForjaWranglerPlatform {
+    return ([Environment]::OSVersion.Platform -eq 'Win32NT' -and [Environment]::OSVersion.Version.Build -ge 22000)
+}
+function Invoke-ForjaWranglerProject {
+    if(-not (Test-ForjaWranglerPlatform)){Write-Warn 'Wrangler requiere Windows 11 o un entorno compatible del proveedor.';return 'pendiente'}
+    $path=Read-Host '  Ruta absoluta del proyecto Cloudflare (ENTER = pendiente)'
+    if([string]::IsNullOrWhiteSpace($path)){return 'pendiente'}
+    try {
+        if(-not [IO.Path]::IsPathRooted($path)){throw 'La ruta debe ser absoluta.'}
+        $path=[IO.Path]::GetFullPath($path)
+        Assert-NoReparsePath $path
+        $manifest=Join-Path $path 'package.json'
+        Assert-NoReparsePath $manifest
+        if(-not (Test-Path -LiteralPath $manifest -PathType Leaf)){throw 'Falta package.json del proyecto.'}
+        $null=Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach($relative in @('package-lock.json','npm-shrinkwrap.json','node_modules','node_modules\wrangler','node_modules\.bin')){
+            Assert-NoReparsePath (Join-Path $path $relative)
+        }
+        Write-Info "Proyecto: $path. npm modificara package.json, lockfile y node_modules."
+        if(-not (Ask-SN 'Instalar/actualizar Wrangler como dependencia de desarrollo aqui?')){return 'pendiente'}
+        $version=(Invoke-ForjaTool npm view wrangler version | Out-String).Trim()
+        if($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$'){return 'error'}
+        Invoke-ForjaTool npm install --prefix $path --save-dev ("wrangler@"+$version) 2>&1 | ForEach-Object {Write-Host "  $_"}
+        if($LASTEXITCODE -ne 0){return 'error'}
+        $package=Join-Path $path 'node_modules\wrangler\package.json'
+        $command=Join-Path $path 'node_modules\.bin\wrangler.cmd'
+        Assert-NoReparsePath $package;Assert-NoReparsePath $command
+        if(-not (Test-Path -LiteralPath $package -PathType Leaf) -or -not (Test-Path -LiteralPath $command -PathType Leaf)){return 'error'}
+        $installed=Get-Content -LiteralPath $package -Raw | ConvertFrom-Json
+        if($installed.version -ne $version){return 'error'}
+        $runtime=Invoke-ForjaCommand $command @('--version') | Out-String
+        if($LASTEXITCODE -ne 0 -or $runtime -notmatch ('(?<![0-9.])'+[regex]::Escape($version)+'(?![0-9.])')){return 'error'}
+        Write-OK "Wrangler $version verificado en $path."
+        return 'ok'
+    } catch {Write-Warn $_.Exception.Message;return 'error'}
+}
+function Get-ForjaStoreApp { param($Tool)
+    try {
+        $apps=@(Get-AppxPackage -Name $Tool.Appx -ErrorAction Stop)
+        if($apps.Count){return [pscustomobject]@{State='installed';Version=$apps[0].Version.ToString()}}
+        return [pscustomobject]@{State='absent';Version=$null}
+    } catch {return [pscustomobject]@{State='error';Version=$null}}
+}
+function Get-ForjaAlternatePackage { param($Tool)
+    if($Tool.Scoop -and $Tool.Scoop -match '^[a-z0-9-]+$'){
+        $manifest=Join-Path $env:USERPROFILE ('scoop\apps\'+$Tool.Scoop+'\current\manifest.json')
+        if(Test-Path -LiteralPath $manifest -PathType Leaf){
+            $package=Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json -ErrorAction Stop
+            return ('Scoop '+$Tool.Scoop+' '+$package.version)
+        }
+    }
+    if($Tool.Id -eq 'rust'){
+        $path=Get-ForjaStackCommand 'rustup'
+        if($path){return ('rustup: '+$path)}
+    }
+    return $null
+}
+function Invoke-ForjaStackTool { param($Tool,[switch]$Update)
+    if($Tool.Notice){Write-Warn $Tool.Notice}
+    switch($Tool.Method){
+        'winget' {
+            $before=Get-WingetPackageInfo $Tool.Package
+            if($before.State -eq 'absent'){
+                $alternate=Get-ForjaAlternatePackage $Tool
+                if($alternate){
+                    Write-Info ('Presente por otro gestor: '+$alternate)
+                    if($Update){Write-Warn 'Actualiza con su gestor original; no se agrega otra instalacion.';return 'pendiente'}
+                    return 'aldia'
+                }
+            }
+            if($Update){return (Invoke-WingetUpdate $Tool.Package $Tool.Name)}
+            if($before.State -eq 'installed'){Write-OK ("Ya instalada: "+$before.Version);return 'aldia'}
+            if($before.State -ne 'absent'){return 'error'}
+            if(-not (Install-Winget $Tool.Package $Tool.Name)){return 'error'}
+            $script:ForjaWingetInventory=$null
+            $after=Get-WingetPackageInfo $Tool.Package
+            if($after.State -eq 'installed'){return 'ok'}
+            Write-Warn 'El instalador termino; falta confirmar el registro de la herramienta.'
+            return 'pendiente'
+        }
+        'npm' {return (Invoke-ForjaCatalogNpm $Tool -Update:$Update)}
+        'archive' {return (Invoke-ForjaArchiveTool $Tool -Update:$Update)}
+        'store' {
+            $before=Get-ForjaStoreApp $Tool
+            if($before.State -eq 'error'){Write-Warn 'No se pudo consultar Microsoft Store.';return 'pendiente'}
+            if($Update){
+                if($before.State -eq 'absent'){return 'saltado'}
+                Write-Info "$($Tool.Name) $($before.Version). Actualizaciones gestionadas por Microsoft Store."
+                return 'saltado'
+            }
+            if($before.State -eq 'installed'){Write-OK "$($Tool.Name) presente: $($before.Version).";return 'aldia'}
+            # ID Store tomado de la documentacion oficial, separado del ID CLI OpenAI.Codex.
+            winget install --id $Tool.Package --exact --source msstore --disable-interactivity 2>&1 | ForEach-Object {Write-Host "  $_"}
+            $code=$LASTEXITCODE;$after=Get-ForjaStoreApp $Tool
+            if($code -eq 0 -and $after.State -eq 'installed'){return 'ok'}
+            Write-Warn "Revisa la instalacion en Microsoft Store: $($Tool.Docs)";return 'pendiente'
+        }
+        'python-venv' {
+            $path=Join-Path $env:LOCALAPPDATA 'Forja\Python\web-vision'
+            if($Update -and -not (Test-Path -LiteralPath $path)){return 'saltado'}
+            $result=Invoke-ForjaPythonLibraries -Update:$Update -Profile 'web-vision'
+            return $result.State
+        }
+        'project-npm' {
+            if($Update){Write-Dim 'Wrangler: dependencias por proyecto; para elegir uno usa modo 1 y selecciona Wrangler.';return 'saltado'}
+            return (Invoke-ForjaWranglerProject)
+        }
+        default {Write-Warn 'Metodo de instalacion no reconocido.';return 'error'}
+    }
+}
+function Invoke-ForjaStackProfile { param([switch]$Update)
+    $results=@()
+    foreach($tool in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core})){
+        Write-Info ("["+$tool.Group+"] "+$tool.Name)
+        if(-not $Update -and -not (Ask-SN ("Incluir "+$tool.Name+'?'))){$state='saltado'}
+        else {
+            try {$state=Invoke-ForjaStackTool $tool -Update:$Update}
+            catch {Write-Warn "$($tool.Name): fallo del paso ($($_.Exception.GetType().Name)).";$state='error'}
+        }
+        if($state -notin @('ok','ok-aviso','aldia','saltado','pendiente','error')){$state='error'}
+        $results+=[pscustomobject]@{Id=$tool.Id;Name=$tool.Name;State=$state}
+        if($Update){Add-UpdResultado $state}
+        Write-Host "  Resultado: $state"
+    }
+    return $results
+}
+function Invoke-ForjaPythonUpdates { param([switch]$OfferNewBranch)
+    $states=@()
+    foreach($branch in @('3.15','3.14','3.13','3.12','3.11','3.10')){
+        $id='Python.Python.'+$branch
+        $info=Get-WingetPackageInfo $id
+        if($info.State -eq 'installed'){$states+=Invoke-WingetUpdate $id ('Python '+$branch)}
+        elseif($info.State -ne 'absent'){$states+='error';Write-Warn "No se pudo consultar Python $branch."}
+    }
+    if(-not $states.Count){Write-Dim 'No hay ramas Python administradas por WinGet. No se modifican Conda ni venvs.';return 'saltado'}
+    if($OfferNewBranch){
+        $target=Get-WingetPackageInfo 'Python.Python.3.14'
+        if($target.State -eq 'absent'){
+            Write-Info 'Python 3.14 es la rama de instalacion revisada de Forja. Puede convivir con tu Python actual.'
+            if(Ask-SN 'Agregar Python 3.14 en paralelo, sin eliminar versiones ni migrar venvs/Conda?'){
+                if(Install-Winget 'Python.Python.3.14' 'Python 3.14'){
+                    $script:ForjaWingetInventory=$null
+                    $confirmed=Get-WingetPackageInfo 'Python.Python.3.14'
+                    if($confirmed.State -eq 'installed'){$states+='ok'}else{$states+='pendiente'}
+                } else {$states+='error'}
+            }
+        }
+    }
+    foreach($state in @('error','pendiente','ok-aviso','ok','aldia','saltado')){if($states -contains $state){return $state}}
+    return 'error'
+}
+function Invoke-ForjaSupabaseUpdate {
+    $info=Get-WingetPackageInfo 'Supabase.CLI'
+    if($info.State -eq 'installed'){return (Invoke-WingetUpdate 'Supabase.CLI' 'Supabase CLI')}
+    if($info.State -ne 'absent'){return 'error'}
+    if(Test-NpmPkg 'supabase'){return (Invoke-NpmUpdate 'supabase' 'Supabase CLI')}
+    $tool=Get-ForjaStackCatalog | Where-Object Id -eq 'supabase-native'
+    return (Invoke-ForjaArchiveTool $tool -Update)
+}
+function Show-ForjaProjectStack {
+    Write-Section 'STACK POR PROYECTO'
+    Write-Info 'React, TypeScript, Vite y Tailwind pertenecen a cada proyecto: usa su package.json y lockfile.'
+    Write-Info 'Para empezar: npm create vite@latest mi-app -- --template react-ts (ejecutar manualmente donde elijas).'
+    Write-Info 'Tailwind: agrega tailwindcss y @tailwindcss/vite en ese proyecto y configura el plugin de Vite.'
+    Write-Info 'PWA y extensiones Chrome se construyen desde el proyecto; no requieren instalar extensiones de terceros.'
+    Write-Info 'Flask/OpenCV: python -m venv .venv; luego .venv\Scripts\python.exe -m pip install Flask opencv-python.'
+    Write-Info 'PostGIS se habilita en una base PostgreSQL elegida; no se ejecutan cambios SQL desde Forja.'
+    Write-Info 'Supabase Edge Functions, Neon y Cloudflare necesitan el proyecto y sus permisos, ademas de la CLI.'
+    Write-Info 'Autenticaciones manuales: codex login | agent login | agy | neon auth | resend login | render login.'
+    Write-Info 'Cloudflare: .\node_modules\.bin\wrangler.cmd login (desde el proyecto con Wrangler instalado).'
+    Write-Warn 'No se capturan tokens, no se crean recursos, no se envian emails ni se ejecutan deploys.'
+    Write-Info 'Cada agente conserva sus skills, reglas y MCP: no se sobreescriben ni se copian configuraciones entre agentes.'
+    Write-Info 'Grok Bot no tiene una CLI independiente verificada aqui. No se instala un paquete grok de terceros.'
 }
 
 $T = 22
@@ -522,7 +1209,7 @@ Write-Host ""
 Write-Section "============================================================"
 Write-Host ""
 Write-Host "    FORJA DEL DESARROLLADOR $VERSION" -ForegroundColor Yellow
-Write-Host "    Setup completo para desarrollar con Claude Code" -ForegroundColor White
+Write-Host "    Stack para crear con agentes de IA" -ForegroundColor White
 Write-Host ""
 Write-Dim   "    by Rodo Agustin Garcia  |  ragustingarcia.com"
 Write-Host ""
@@ -538,7 +1225,7 @@ Write-Host "    [ 3] WSL           [ 4] Git"
 Write-Host ""
 Write-Host "  --- LENGUAJES (5-8) ---" -ForegroundColor White
 Write-Host "    [ 5] Node.js LTS   [ 6] pnpm"
-Write-Host "    [ 7] Python 3.13   [ 8] Libs Python"
+Write-Host "    [ 7] Python        [ 8] Libs Python"
 Write-Host ""
 Write-Host "  --- DESARROLLO (9-12) ---" -ForegroundColor White
 Write-Host "    [ 9] VS Code       [10] Claude Code CLI"
@@ -562,16 +1249,36 @@ Write-Section "============================================================"
 Write-Host ""
 Write-Host "  MODO DE EJECUCION:" -ForegroundColor White
 Write-Host ""
-Write-Host "    [1] Setup completo    - instalar todo y vincular servicios" -ForegroundColor Green
+Write-Host "    [1] Preparar stack    - base + elegir agentes y servicios" -ForegroundColor Green
 Write-Host "    [2] Solo actualizar   - actualizar lo que ya esta instalado" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "    [3] Diagnostico       - rutas de herramientas, sin ejecutar instaladores" -ForegroundColor Cyan
+Write-Host "    [4] Stack por proyecto - frontend, Flask/OpenCV, PostGIS y conexiones"
 Write-Host "    [0] Salir (por defecto)" -ForegroundColor DarkGray
-$modoSel = Read-Host "  Elegi 1, 2 o 3 (ENTER = salir)"
+Write-Host ""
+Write-Section '  STACK AMPLIADO (seleccion individual en modo 1)'
+foreach($group in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core} | Group-Object Group)) {
+    Write-Host ('  '+$group.Name+': '+(($group.Group | ForEach-Object {$_.Name}) -join ', '))
+}
+Write-Dim '  Sin controladores ni aplicaciones de uso diario.'
+$modoSel = Read-Host "  Elegi 1, 2, 3 o 4 (ENTER = salir)"
+if($modoSel -eq '4'){Show-ForjaProjectStack;Read-Host '  ENTER para cerrar';exit 0}
 if ($modoSel -eq '3') {
     foreach ($tool in @('winget','pwsh','wsl','git','node','npm','python','pip','claude','gh','docker','snyk')) {
         $command = Get-Command $tool -ErrorAction SilentlyContinue
         if ($command) { Write-Info "$tool : $($command.Source)" } else { Write-Dim "$tool : no encontrado" }
+    }
+    foreach($tool in @(Get-ForjaStackCatalog)){
+        if($tool.Method -eq 'archive'){
+            $root=Get-ForjaManagedRoot $tool
+            Write-Info ($tool.Name+' | revisada '+$tool.Version+' | '+$root)
+        } elseif($tool.Command){
+            $path=Get-ForjaStackCommand $tool.Command
+            Write-Info ($tool.Name+' : '+$(if($path){$path}else{'no encontrada en PATH'}))
+        } elseif($tool.Method -eq 'store'){
+            $app=Get-ForjaStoreApp $tool
+            Write-Info ($tool.Name+' : '+$app.State+' '+$app.Version)
+        } else {Write-Info ($tool.Name+' | ID '+$tool.Package)}
     }
     exit 0
 }
@@ -599,98 +1306,6 @@ if ($modoSel -eq "2") {
 
     # Pre-chequea si hay update; solo si lo hay corre winget upgrade
     # mostrando su barra de progreso nativa en vivo
-    function Invoke-WingetUpdate { param($id, $nombre)
-        $info = Get-WingetPackageInfo $id
-        if ($info.State -eq 'absent') { Write-Dim "$nombre no figura en el inventario de WinGet. Saltado."; return 'saltado' }
-        if ($info.State -ne 'installed') { Write-Warn "${nombre}: $($info.Detail)"; return 'error' }
-        if (-not $info.Available) { Write-OK "$nombre ya esta al dia (instalada: $($info.Version))."; return 'aldia' }
-        Write-Info "$nombre : instalada $($info.Version) -> disponible $($info.Available)"
-        if ($id -eq 'MongoDB.Shell' -and (Test-MongoshBusy)) {
-            Write-Warn 'mongosh esta abierto. Cerra sus sesiones y volve a actualizarlo; no se cierran procesos automaticamente.'
-            return 'pendiente'
-        }
-        if ($id -eq 'MongoDB.Shell') {
-            $previousFailure=Get-MongoshPreviousFailure $info.Available
-            if ($previousFailure) {
-                Write-Warn "El ultimo intento de esta version fallo con MSI 1304 al escribir archivos. Log: $previousFailure"
-                Write-Info 'La reparacion usa solo el MSI oficial con SHA-256 y firma verificados. Puede pedir UAC para ese paquete.'
-                if (Ask-SN 'Reparar mongosh con Windows Installer y permisos para este paso?') { return (Invoke-MongoshRepair $info.Available) }
-                return 'pendiente'
-            }
-        }
-        $installerOutput=New-Object 'System.Collections.Generic.List[string]'
-        try {
-            winget upgrade --id $id --exact --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { $installerOutput.Add($_.ToString()); Write-Host "  $_" }
-            $codigo = $LASTEXITCODE
-        } catch { Write-Warn "${nombre}: no se pudo iniciar la actualizacion."; return 'error' }
-        if ($codigo -eq $WINGET_SIN_UPDATE) { Write-OK "$nombre sin actualizacion aplicable (instalada: $($info.Version))."; return 'aldia' }
-        if ($codigo -eq 0) {
-            $script:ForjaWingetInventory = $null
-            $after = Get-WingetPackageInfo $id
-            if ($after.State -eq 'installed' -and $after.Version -eq $info.Available) {
-                Write-OK "$nombre actualizado. Version instalada: $($after.Version)."; return 'ok'
-            }
-            Write-Warn "$nombre : el instalador termino, pero no se pudo confirmar la version esperada. Volve a verificar."
-            return 'error'
-        }
-        $detail=Get-InstallerFailureDetail ($installerOutput -join "`n")
-        Write-Warn "${nombre}: fallo WinGet $codigo. $detail"
-        if ($id -eq 'MongoDB.Shell' -and $detail -match 'MSI 1304') {
-            if (Ask-SN 'Intentar reparacion con el MSI oficial verificado y UAC solo para este paquete?') { return (Invoke-MongoshRepair $info.Available) }
-            return 'pendiente'
-        }
-        return 'error'
-    }
-
-    # Actualiza un paquete npm global solo si la version instalada
-    # difiere de la ultima publicada (evita reinstalaciones de minutos)
-    function Invoke-NpmUpdate { param($pkg, $nombre)
-        $vLocal = $null
-        $lista = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String
-        if ($LASTEXITCODE -ne 0) { Write-Warn "${nombre}: fallo la consulta local de npm."; return 'error' }
-        if ($lista -match ([regex]::Escape($pkg) + "@(\S+)")) { $vLocal = $Matches[1] }
-        $vUltima = ((Invoke-ForjaTool npm view $pkg version 2>&1) | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or $vUltima -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') {
-            Write-Warn "${nombre}: no se pudo consultar una version valida del registro."; return 'error'
-        }
-        if ($vLocal -and $vUltima -and $vLocal -eq $vUltima) {
-            if (-not (Test-NpmRuntime $pkg $vLocal)) { Write-Warn "${nombre}: la version figura instalada pero el comando no responde correctamente."; return 'error' }
-            Write-OK "$nombre ya esta al dia ($vLocal)."
-            return "aldia"
-        }
-        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        $npmOutput=New-Object 'System.Collections.Generic.List[string]'
-        Invoke-ForjaTool npm install -g "$pkg@$vUltima" 2>&1 | ForEach-Object { $npmOutput.Add($_.ToString()); Write-Host "  $_" }
-        $codigo = $LASTEXITCODE
-        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        if ($codigo -eq 0) {
-            $after = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String
-            if ($LASTEXITCODE -eq 0 -and $after -match ([regex]::Escape($pkg) + '@(\S+)') -and $Matches[1] -eq $vUltima) {
-                if (-not (Test-NpmRuntime $pkg $vUltima)) { Write-Warn "${nombre}: paquete actualizado pero la CLI no responde con esa version."; return 'error' }
-                Write-OK "$nombre actualizado y comando verificado. Version instalada: $vUltima."
-                if (($npmOutput -join "`n") -match '(?im)^npm warn') {
-                    Write-Warn 'npm emitio avisos del proveedor. La CLI responde; revisa esos avisos. No se cambia la politica de scripts.'
-                    return 'ok-aviso'
-                }
-                return 'ok'
-            }
-            Write-Warn "${nombre}: npm termino pero no se confirmo la version esperada."; return 'error'
-        }
-        Write-Warn "${nombre}: error al actualizar."
-        return "error"
-    }
-    function Add-UpdResultado { param($r)
-        switch ($r) {
-            "ok"    { $script:updOK++ }
-            "aldia" { $script:updAlDia++ }
-            "error" { $script:updError++ }
-            "saltado" { $script:updSaltado++ }
-            "pendiente" { $script:updPendiente++ }
-            "ok-aviso" { $script:updOK++; $script:updAvisos++ }
-            "aviso" { $script:updAvisos++ }
-        }
-    }
-
     # El lanzador usa Windows PowerShell 5.1, por lo que pwsh no queda bloqueado.
     Write-Info 'PowerShell 7...'
     Add-UpdResultado (Invoke-WingetUpdate 'Microsoft.PowerShell' 'PowerShell 7')
@@ -716,36 +1331,14 @@ if ($modoSel -eq "2") {
         Write-Host ""
     }
 
-    # --- Python (el id de winget incluye la version: 3.13, 3.12, etc.) ---
-    Write-Info "Python..."
-    $pyId = $null
-    foreach ($v in @("3.13","3.12","3.11","3.10")) {
-        if (Test-WingetPkg "Python.Python.$v") { $pyId = "Python.Python.$v"; break }
-    }
-    if ($pyId) {
-        Add-UpdResultado (Invoke-WingetUpdate $pyId "Python")
-    } else {
-        Write-Dim "Python no esta instalado via winget. Saltado."
-        $script:updSaltado++
-    }
-    Write-Host ""
+    # Actualizar cada rama instalada, sin migrar ni borrar entornos.
+    Write-Info 'Python (todas las ramas WinGet instaladas)...'
+    Add-UpdResultado (Invoke-ForjaPythonUpdates -OfferNewBranch)
+    Write-Host ''
 
-    # --- Supabase CLI (winget o npm, segun como se instalo) ---
-    Write-Info "Supabase CLI..."
-    if (Test-WingetPkg "Supabase.CLI") {
-        Add-UpdResultado (Invoke-WingetUpdate "Supabase.CLI" "Supabase CLI")
-    } elseif (Get-Command supabase -ErrorAction SilentlyContinue) {
-        if ((Get-Command npm -ErrorAction SilentlyContinue) -and (Test-NpmPkg "supabase")) {
-            Add-UpdResultado (Invoke-NpmUpdate "supabase" "Supabase CLI")
-        } else {
-            Write-Warn "Supabase CLI instalado por otro medio: actualizalo manualmente."
-            $script:updError++
-        }
-    } else {
-        Write-Dim "Supabase CLI no esta instalado. Saltado."
-        $script:updSaltado++
-    }
-    Write-Host ""
+    Write-Info 'Supabase CLI...'
+    Add-UpdResultado (Invoke-ForjaSupabaseUpdate)
+    Write-Host ''
 
     # --- WSL ---
     Write-Info "WSL..."
@@ -855,6 +1448,9 @@ if ($modoSel -eq "2") {
     $pythonResult=Invoke-ForjaPythonLibraries -Update
     Add-UpdResultado $pythonResult.State
     if ($pythonResult.SharedConflict) { Add-UpdResultado 'aviso' }
+
+    Write-Section 'AGENTES, CLI Y SERVICIOS DEL STACK'
+    $null=Invoke-ForjaStackProfile -Update
 
     # --- Resumen ---
     Write-Host ""
@@ -1083,7 +1679,7 @@ if (Get-Command pnpm -ErrorAction SilentlyContinue) {
 # ============================================================
 #  [7] PYTHON 3.13
 # ============================================================
-Write-Titulo 7 $T "Python 3.13" "Lenguaje para backend e IA"
+Write-Titulo 7 $T "Python (actualizable)" "Lenguaje para backend e IA"
 Write-Host "  Popular para IA, automatizacion y web."
 Write-Host "  Ej: python script.py | pip install fastapi"
 Write-Host ""
@@ -1091,10 +1687,10 @@ Write-Info "Verificando..."
 Write-Host ""
 
 $pyPaths = @(
-    "$env:LOCALAPPDATA\Programs\Python\Python313",
-    "$env:LOCALAPPDATA\Programs\Python\Python313\Scripts",
-    "$env:ProgramFiles\Python313",
-    "$env:ProgramFiles\Python313\Scripts"
+    "$env:LOCALAPPDATA\Programs\Python\Python314",
+    "$env:LOCALAPPDATA\Programs\Python\Python314\Scripts",
+    "$env:ProgramFiles\Python314",
+    "$env:ProgramFiles\Python314\Scripts"
 )
 foreach ($p in $pyPaths) { if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" } }
 
@@ -1102,14 +1698,18 @@ $pv = Test-PythonReal
 if ($pv) {
     Write-OK "Python ($pv)."
     $status["python"] = "OK"
+    Write-Info 'El modo 2 actualiza las ramas WinGet instaladas. Los venvs y Conda se conservan.'
+    if($pv -notmatch 'Python 3\.14\.' -and (Ask-SN 'Agregar Python 3.14 en paralelo, sin eliminar tu version ni migrar proyectos?')) {
+        if(-not (Install-Winget 'Python.Python.3.14' 'Python 3.14')){$status['python']='ERROR'}
+    }
 } else {
-    if (Install-Winget "Python.Python.3.13" "Python 3.13") {
+    if (Install-Winget "Python.Python.3.14" "Python 3.14") {
         Write-OK "Instalado."
         foreach ($p in $pyPaths) { if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" } }
         if (Test-PythonReal) { $status["python"] = "OK" }
         else { $status["python"] = "OK - REABRIR"; $necesitaReabrir = $true }
     } else {
-        Write-Err "Error instalando Python 3.13."
+        Write-Err "Error instalando Python 3.14."
         $status["python"] = "ERROR"
     }
 }
@@ -1418,33 +2018,16 @@ Write-Host ""
 Write-Info "Verificando..."
 Write-Host ""
 
-if (Get-Command supabase -ErrorAction SilentlyContinue) {
-    $sbv = (Invoke-ForjaTool supabase --version 2>&1) | Out-String
-    Write-OK "Supabase CLI ($($sbv.Trim()))."
-    $status["supabase"] = "OK"
+$supabasePath=Get-ForjaToolPath 'supabase'
+if($supabasePath){
+    $sbv=Invoke-ForjaTool supabase --version | Out-String
+    if($LASTEXITCODE -eq 0){Write-OK ("Supabase CLI: "+$sbv.Trim());$status['supabase']='OK'}
+    else {$status['supabase']='ERROR'}
 } else {
-    if (Install-Winget "Supabase.CLI" "Supabase CLI") {
-        Write-OK "Instalado."
-        $status["supabase"] = "OK"
-        $necesitaReabrir = $true
-    } else {
-        $nm = Get-Command npm -ErrorAction SilentlyContinue
-        if ($nm) {
-            Write-Info "[INSTALANDO] Supabase CLI via npm (fallback)..."
-            Invoke-ForjaTool npm install -g supabase 2>&1 | Out-Null
-            if (Get-Command supabase -ErrorAction SilentlyContinue) {
-                Write-OK "Instalado via npm."
-                $status["supabase"] = "OK"
-            } else {
-                Write-Err "Error instalando Supabase CLI."
-                $status["supabase"] = "ERROR"
-            }
-        } else {
-            Write-Warn "npm no disponible."
-            $status["supabase"] = "PENDIENTE"
-            $necesitaReabrir = $true
-        }
-    }
+    $supabaseTool=Get-ForjaStackCatalog | Where-Object Id -eq 'supabase-native'
+    $state=Invoke-ForjaArchiveTool $supabaseTool
+    if($state -in @('ok','aldia')){$status['supabase']='OK'}
+    elseif($state -eq 'pendiente'){$status['supabase']='PENDIENTE'}else{$status['supabase']='ERROR'}
 }
 
 # ============================================================
@@ -1477,6 +2060,14 @@ if (-not $nm) {
         }
     }
 }
+
+Write-Section 'ELEGIR AGENTES, CLI Y SERVICIOS DEL STACK'
+Write-Dim 'Cada herramienta es opcional; N o ENTER conserva la seleccion fuera de esta instalacion.'
+$stackResults=@(Invoke-ForjaStackProfile)
+foreach($result in $stackResults){
+    $status['stack-'+$result.Id]=switch($result.State){'error'{'ERROR'};'pendiente'{'PENDIENTE'};'saltado'{'SALTADO'};default{'OK'}}
+}
+Show-ForjaProjectStack
 
 # ============================================================
 #  [21] SKILLS DE CLAUDE CODE
@@ -1540,7 +2131,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 Write-Host ""
 Write-Host ""
 Write-Section "============================================================"
-Write-Section "  RESUMEN DE INSTALACION (Pasos 1-21)"
+Write-Section "  RESUMEN DE INSTALACION (base + stack elegido)"
 Write-Section "============================================================"
 Write-Host ""
 
@@ -1551,7 +2142,7 @@ $items = @(
     @("git",       "Git"),
     @("node",      "Node.js LTS"),
     @("pnpm",      "pnpm"),
-    @("python",    "Python 3.13"),
+    @("python",    "Python"),
     @("pylibs",    "Librerias Python"),
     @("vscode",    "VS Code"),
     @("claude",    "Claude Code CLI"),
@@ -1568,6 +2159,7 @@ $items = @(
     @("skills",    "Skills de Claude Code")
 )
 
+$items+=@($stackResults | ForEach-Object { ,@(('stack-'+$_.Id),$_.Name) })
 foreach ($item in $items) {
     $val = $status[$item[0]]
     if (-not $val) { $val = "SALTADO" }
@@ -1807,10 +2399,10 @@ Write-Host ""
 Write-Host "  1. Abre una terminal nueva y ve a tu proyecto:" -ForegroundColor White
 Write-Host "       cd C:\ruta\a\mi-proyecto" -ForegroundColor Green
 Write-Host ""
-Write-Host "  2. Inicia Claude Code:" -ForegroundColor White
-Write-Host "       claude" -ForegroundColor Green
+Write-Host "  2. Inicia el agente elegido:" -ForegroundColor White
+Write-Host "       claude | codex | agy | Cursor Agent" -ForegroundColor Green
 Write-Host ""
-Write-Host "  3. En la primera sesion, Claude lee el proyecto y propone" -ForegroundColor White
+Write-Host "  3. En la primera sesion, tu agente lee el proyecto y propone" -ForegroundColor White
 Write-Host "     mejoras. Podes empezar con:" -ForegroundColor White
 Write-Host '       "Hace un audit de este proyecto y listame que mejorar"' -ForegroundColor Green
 Write-Host ""
@@ -1835,4 +2427,4 @@ Write-Section "============================================================"
 Write-Host ""
 Read-Host "  Presiona ENTER para cerrar"
 
-if (@($status.Values | Where-Object { $_ -match '^ERROR' }).Count -gt 0) { exit 1 }; exit 0
+if (@($status.Values | Where-Object { $_ -match '^(ERROR|PENDIENTE)' }).Count -gt 0) { exit 1 }; exit 0

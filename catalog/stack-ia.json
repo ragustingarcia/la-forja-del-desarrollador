@@ -1,0 +1,260 @@
+[
+  {
+    "Id": "cursor",
+    "Group": "Editores y agentes",
+    "Name": "Cursor",
+    "Method": "winget",
+    "Package": "Anysphere.Cursor",
+    "Command": "cursor",
+    "Docs": "https://cursor.com/downloads"
+  },
+  {
+    "Id": "antigravity",
+    "Group": "Editores y agentes",
+    "Name": "Antigravity App",
+    "Method": "winget",
+    "Package": "Google.Antigravity",
+    "Command": "antigravity",
+    "Docs": "https://antigravity.google/download"
+  },
+  {
+    "Id": "antigravity-ide",
+    "Group": "Editores y agentes",
+    "Name": "Antigravity IDE",
+    "Method": "winget",
+    "Package": "Google.AntigravityIDE",
+    "Command": "antigravity-ide",
+    "Docs": "https://antigravity.google/download"
+  },
+  {
+    "Id": "gemini-app",
+    "Group": "Editores y agentes",
+    "Name": "Gemini Desktop",
+    "Method": "winget",
+    "Package": "Google.GeminiDesktop",
+    "Command": "",
+    "Docs": "https://gemini.google/"
+  },
+  {
+    "Id": "grok-bot",
+    "Group": "Editores y agentes",
+    "Name": "Grok Bot",
+    "Method": "winget",
+    "Package": "xAI.GrokBot",
+    "Command": "",
+    "Docs": "https://docs.x.ai/grok-bot/get-started"
+  },
+  {
+    "Id": "codex-app",
+    "Group": "Editores y agentes",
+    "Name": "App ChatGPT / Codex",
+    "Method": "store",
+    "Package": "9PLM9XGG6VKS",
+    "Appx": "OpenAI.Codex",
+    "Command": "",
+    "Docs": "https://learn.chatgpt.com/docs/app/windows"
+  },
+  {
+    "Id": "codex-cli",
+    "Group": "CLI de agentes",
+    "Name": "Codex CLI",
+    "Method": "npm",
+    "Package": "@openai/codex",
+    "Command": "codex",
+    "Docs": "https://learn.chatgpt.com/docs/codex/cli"
+  },
+  {
+    "Id": "agy-cli",
+    "Group": "CLI de agentes",
+    "Name": "Antigravity CLI (agy)",
+    "Method": "winget",
+    "Package": "Google.AntigravityCLI",
+    "Command": "agy",
+    "Docs": "https://antigravity.google/docs/getting-started"
+  },
+  {
+    "Id": "cursor-cli",
+    "Group": "CLI de agentes",
+    "Name": "Cursor Agent CLI (Windows x64)",
+    "Method": "archive",
+    "Command": "agent",
+    "Version": "2026.10.22-27dcf5f",
+    "Uri": "https://downloads.cursor.com/lab/2026.10.22-27dcf5f/windows/x64/agent-cli-package.zip",
+    "Sha256": "864A8F6A22F8C5EBEDEF8E0CEBA529EAE9A59B3D7F6FCCB75E43E0F5EFC3C147",
+    "Executable": "dist-package/node.exe",
+    "Script": "dist-package/index.js",
+    "Launcher": "forja-agent.cmd",
+    "Docs": "https://prod.cursor.com/docs/cli/installation"
+  },
+  {
+    "Id": "gemini-cli",
+    "Group": "Gemini CLI (compatibilidad)",
+    "Name": "Gemini CLI (cuentas compatibles)",
+    "Method": "npm",
+    "Package": "@google/gemini-cli",
+    "Command": "gemini",
+    "Notice": "Google retiro el acceso de cuentas personales a Gemini CLI. Preferi agy; revisa tu tipo de cuenta antes de instalar Gemini CLI.",
+    "Docs": "https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals"
+  },
+  {
+    "Id": "neon-cli",
+    "Group": "Servicios cloud",
+    "Name": "Neon CLI",
+    "Method": "npm",
+    "Package": "neon",
+    "Command": "neon",
+    "Docs": "https://neon.com/docs/cli/install"
+  },
+  {
+    "Id": "resend-cli",
+    "Group": "Servicios cloud",
+    "Name": "Resend CLI",
+    "Method": "npm",
+    "Package": "resend-cli",
+    "Command": "resend",
+    "Docs": "https://resend.com/docs/cli"
+  },
+  {
+    "Id": "render-cli",
+    "Group": "Servicios cloud",
+    "Name": "Render CLI (Windows x64)",
+    "Method": "archive",
+    "Command": "render",
+    "Version": "2.33.0",
+    "Uri": "https://github.com/render-oss/cli/releases/download/v2.33.0/cli_2.33.0_windows_amd64.zip",
+    "Sha256": "7A16D74C9F18AC9A1383D9A3A43C3C07B4374DBDDB183F49A05810C130B5CA16",
+    "Executable": "render.exe",
+    "Script": "",
+    "Launcher": "forja-render.cmd",
+    "Docs": "https://render.com/docs/cli"
+  },
+  {
+    "Id": "cloudflared",
+    "Group": "Servicios cloud",
+    "Name": "Cloudflare Tunnel CLI",
+    "Method": "winget",
+    "Package": "Cloudflare.cloudflared",
+    "Command": "cloudflared",
+    "Docs": "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+  },
+  {
+    "Id": "wrangler",
+    "Group": "Servicios cloud",
+    "Name": "Cloudflare Wrangler (por proyecto)",
+    "Method": "project-npm",
+    "Package": "wrangler",
+    "Command": "wrangler",
+    "Docs": "https://developers.cloudflare.com/workers/wrangler/install-and-update/"
+  },
+  {
+    "Id": "postgresql",
+    "Group": "Bases de datos locales",
+    "Name": "PostgreSQL 17 (servidor y cliente)",
+    "Method": "winget",
+    "Package": "PostgreSQL.PostgreSQL.17",
+    "Command": "psql",
+    "Docs": "https://www.postgresql.org/download/windows/"
+  },
+  {
+    "Id": "rust",
+    "Group": "Compilacion y escritorio",
+    "Name": "Rust / Cargo (rustup)",
+    "Method": "winget",
+    "Package": "Rustlang.Rustup",
+    "Command": "rustup",
+    "Notice": "WinGet gestiona rustup. Los toolchains se actualizan por separado con rustup update, segun cada proyecto.",
+    "Docs": "https://www.rust-lang.org/tools/install"
+  },
+  {
+    "Id": "buildtools",
+    "Group": "Compilacion y escritorio",
+    "Name": "Visual Studio Build Tools 2022",
+    "Method": "winget",
+    "Package": "Microsoft.VisualStudio.2022.BuildTools",
+    "Command": "",
+    "Notice": "El instalador permite elegir workloads. Revisa C++ y Windows SDK para Tauri o extensiones nativas; no se marcan como instalados solo por tener Build Tools.",
+    "Docs": "https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022"
+  },
+  {
+    "Id": "dotnet",
+    "Group": "Compilacion y escritorio",
+    "Name": ".NET SDK 10",
+    "Method": "winget",
+    "Package": "Microsoft.DotNet.SDK.10",
+    "Command": "dotnet",
+    "Docs": "https://dotnet.microsoft.com/download"
+  },
+  {
+    "Id": "inno",
+    "Group": "Compilacion y escritorio",
+    "Name": "Inno Setup",
+    "Method": "winget",
+    "Package": "JRSoftware.InnoSetup",
+    "Command": "ISCC",
+    "Docs": "https://jrsoftware.org/isinfo.php"
+  },
+  {
+    "Id": "android",
+    "Group": "Android y Java",
+    "Name": "Android Studio",
+    "Method": "winget",
+    "Package": "Google.AndroidStudio",
+    "Command": "",
+    "Notice": "SDK, emuladores y plataformas Android se eligen despues desde SDK Manager.",
+    "Docs": "https://developer.android.com/studio"
+  },
+  {
+    "Id": "jdk17",
+    "Group": "Android y Java",
+    "Name": "Temurin JDK 17",
+    "Method": "winget",
+    "Package": "EclipseAdoptium.Temurin.17.JDK",
+    "Command": "java",
+    "Docs": "https://adoptium.net/installation/",
+    "Scoop": "temurin17-jdk"
+  },
+  {
+    "Id": "jdk21",
+    "Group": "Android y Java",
+    "Name": "Temurin JDK 21",
+    "Method": "winget",
+    "Package": "EclipseAdoptium.Temurin.21.JDK",
+    "Command": "java",
+    "Notice": "JDK 17 y 21 pueden convivir. JAVA_HOME y el JDK de Gradle se eligen por proyecto.",
+    "Docs": "https://adoptium.net/installation/",
+    "Scoop": "temurin21-jdk"
+  },
+  {
+    "Id": "miniforge",
+    "Group": "Python cientifico",
+    "Name": "Miniforge3",
+    "Method": "winget",
+    "Package": "CondaForge.Miniforge3",
+    "Command": "conda",
+    "Notice": "Forja gestiona el instalador de Miniforge, no modifica ni migra sus entornos Conda.",
+    "Docs": "https://github.com/conda-forge/miniforge"
+  },
+  {
+    "Id": "python-web-vision",
+    "Group": "Python cientifico",
+    "Name": "Flask + OpenCV + NumPy (venv aislado)",
+    "Method": "python-venv",
+    "Command": "",
+    "Docs": "https://docs.python.org/3/library/venv.html"
+  },
+  {
+    "Id": "supabase-native",
+    "Group": "Base",
+    "Core": true,
+    "Name": "Supabase CLI (Windows x64)",
+    "Method": "archive",
+    "Command": "supabase",
+    "Version": "2.122.0",
+    "Uri": "https://github.com/supabase/cli/releases/download/v2.122.0/supabase_2.122.0_windows_amd64.zip",
+    "Sha256": "60031FD5BF050FC12A0C6AEF68997600D143870F944BF13109C7765DCA329AF8",
+    "Executable": "supabase.exe",
+    "Script": "",
+    "Launcher": "forja-supabase.cmd",
+    "Docs": "https://supabase.com/docs/guides/local-development/cli/getting-started"
+  }
+]

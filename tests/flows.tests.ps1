@@ -15,13 +15,18 @@ if ($FlowCase) {
     $script:text=$script:text.Replace($runner.Extent.Text, 'function Invoke-ForjaTool { param([string]$Name) Invoke-FakeTool -Name $Name -Arguments $args }')
     $libraries=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPythonLibraries' },$true)
     if (-not $libraries) { throw 'Falta frontera de librerias Python' }
-    $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
+    $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update,[string]$Profile) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
+    $store=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaStoreApp'},$true)
+    $script:text=$script:text.Replace($store.Extent.Text, 'function Get-ForjaStoreApp {param($Tool) return [pscustomobject]@{State=''absent'';Version=$null}}')
+    $native=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaStackCommand'},$true)
+    $script:text=$script:text.Replace($native.Extent.Text, 'function Get-ForjaStackCommand {param($Name) return $null}')
     function global:Clear-Host {}
     function global:Read-Host { param($Prompt)
         $script:answers++
         if ($script:answers -eq 1) {
             switch ($FlowCase) {
                 'setup-ok' { return '1' }
+                'stack-selected' { return '1' }
                 'setup-fail' { return '1' }
                 'update-fail' { return '2' }
                 'update-current' { return '2' }
@@ -29,11 +34,13 @@ if ($FlowCase) {
                 'python-conflict' { return '2' }
                 'cancel' { return '1' }
                 'diagnostic' { return '3' }
+                'project-guide' { return '4' }
                 default { return '' }
             }
         }
         if ($script:answers -eq 2 -and $FlowCase -ne 'cancel') { return 'S' }
         if ($FlowCase -eq 'cleanup-fail' -and $Prompt -like '*Eliminar la instalacion npm*') { return 'S' }
+        if ($FlowCase -eq 'stack-selected' -and ($Prompt -like '*Incluir Codex CLI?*' -or $Prompt -like '*Incluir Flask + OpenCV*')) { return 'S' }
         return 'N'
     }
     function global:Start-Process { throw 'PROHIBIDO iniciar procesos reales en estos flujos' }
@@ -84,7 +91,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','invalid')) {
+    foreach ($case in @('setup-ok','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -99,6 +106,12 @@ try {
         if ($case -in @('setup-fail','update-fail','cleanup-fail')) { $expected = 1 }
         if ($p.ExitCode -ne $expected -or $stderr) { throw "$case : exit=$($p.ExitCode) esperado=$expected`n$stderr`n$stdout" }
         $calls = @(Get-Content -LiteralPath $evidencePath)
+        if ($case -eq 'project-guide' -and ($calls.Count -gt 0 -or $stdout -notmatch 'STACK POR PROYECTO')) { throw 'La guia de stack debe funcionar sin ejecutar herramientas' }
+        if ($case -eq 'stack-selected' -and ($stdout -notmatch 'Codex CLI' -or @($calls | Where-Object {$_ -like '*@openai/codex*'}).Count -eq 0)) { throw 'La seleccion de agentes no recorrio Codex CLI' }
+        if ($case -eq 'stack-selected') {
+            $summary=($stdout -split 'RESUMEN DE INSTALACION',2)[1]
+            if($summary -notmatch '\[OK\]\s+Codex CLI' -or $summary -notmatch '\[OK\]\s+Flask \+ OpenCV'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
+        }
         if ($case -in @('cancel','diagnostic','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
         if ($case -eq 'update-fail' -and @($calls | Where-Object { $_ -match '^npm install' }).Count -gt 0) { throw 'Se instalo a pesar de fallar el registro' }
         if ($case -eq 'setup-fail' -and $stdout -notmatch '\[X\]') { throw 'No mostro errores de instalacion' }
@@ -113,7 +126,9 @@ try {
             $current=[regex]::Match($stdout,'Ya al dia:\s*(\d+)').Groups[1].Value
             $errors=[regex]::Match($stdout,'Con errores:\s*(\d+)').Groups[1].Value
             $pending=[regex]::Match($stdout,'Pendientes:\s*(\d+)').Groups[1].Value
-            if ($updated -ne '0' -or $current -ne '19') { throw "Contadores incorrectos $case : $updated/$current" }
+            $catalog=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText((Join-Path $repoRoot 'catalog\stack-ia.json')))
+            $expectedCurrent=19+@($catalog | Where-Object {$_.Method -in @('winget','npm') -and -not $_.Core}).Count
+            if ($updated -ne '0' -or $current -ne [string]$expectedCurrent) { throw "Contadores incorrectos $case : $updated/$current esperado 0/$expectedCurrent" }
             if ($case -eq 'cleanup-fail' -and $errors -ne '1') { throw 'La limpieza fallida no quedo en el resumen' }
             $warnings=[regex]::Match($stdout,'Con avisos:\s*(\d+)').Groups[1].Value
             if ($case -eq 'python-conflict' -and ($pending -ne '0' -or $warnings -ne '1')) { throw 'El conflicto compartido debe quedar como aviso separado, sin afirmar que se reparo' }

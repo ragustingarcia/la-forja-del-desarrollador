@@ -30,3 +30,4 @@ jobs:
           ./tests/native-tools.tests.ps1
           ./tests/python-environment.tests.ps1
           ./tests/msi-repair.tests.ps1
+          ./tests/stack.tests.ps1
