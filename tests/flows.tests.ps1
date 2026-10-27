@@ -20,12 +20,23 @@ if ($FlowCase) {
     $script:text=$script:text.Replace($store.Extent.Text, 'function Get-ForjaStoreApp {param($Tool) return [pscustomobject]@{State=''absent'';Version=$null}}')
     $native=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaStackCommand'},$true)
     $script:text=$script:text.Replace($native.Extent.Text, 'function Get-ForjaStackCommand {param($Name) return $null}')
+    $archive=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaArchiveTool'},$true)
+    $script:text=$script:text.Replace($archive.Extent.Text, 'function Invoke-ForjaArchiveTool {param($Tool,[switch]$Update) $script:calls.Add((''archive ''+$Tool.Id)); if($Update){return ''saltado''};if($FlowCase -eq ''setup-fail''){return ''error''};return ''ok''}')
+    foreach($boundary in @('Invoke-ForjaCommand','Save-ForjaToolArchive')){
+        $definition=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $boundary},$true)
+        $script:text=$script:text.Replace($definition.Extent.Text, ('function '+$boundary+' { throw ''PROHIBIDO ejecutar binarios o descargar en estos flujos'' }'))
+    }
+    if($FlowCase -eq 'fresh-setup'){
+        $resolver=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaToolPath'},$true)
+        $script:text=$script:text.Replace($resolver.Extent.Text, 'function Get-ForjaToolPath {param($Name) if($Name -eq ''supabase''){return $null};return ''C:\fixture\tool.cmd''}')
+    }
     function global:Clear-Host {}
     function global:Read-Host { param($Prompt)
         $script:answers++
         if ($script:answers -eq 1) {
             switch ($FlowCase) {
                 'setup-ok' { return '1' }
+                'fresh-setup' { return '1' }
                 'stack-selected' { return '1' }
                 'setup-fail' { return '1' }
                 'update-fail' { return '2' }
@@ -40,7 +51,7 @@ if ($FlowCase) {
         }
         if ($script:answers -eq 2 -and $FlowCase -ne 'cancel') { return 'S' }
         if ($FlowCase -eq 'cleanup-fail' -and $Prompt -like '*Eliminar la instalacion npm*') { return 'S' }
-        if ($FlowCase -eq 'stack-selected' -and ($Prompt -like '*Incluir Codex CLI?*' -or $Prompt -like '*Incluir Flask + OpenCV*')) { return 'S' }
+        if ($FlowCase -eq 'stack-selected' -and ($Prompt -like '*Incluir Codex CLI?*' -or $Prompt -like '*Incluir Flask + OpenCV*' -or $Prompt -like '*Incluir Render CLI*')) { return 'S' }
         return 'N'
     }
     function global:Start-Process { throw 'PROHIBIDO iniciar procesos reales en estos flujos' }
@@ -91,7 +102,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','invalid')) {
+    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -110,8 +121,9 @@ try {
         if ($case -eq 'stack-selected' -and ($stdout -notmatch 'Codex CLI' -or @($calls | Where-Object {$_ -like '*@openai/codex*'}).Count -eq 0)) { throw 'La seleccion de agentes no recorrio Codex CLI' }
         if ($case -eq 'stack-selected') {
             $summary=($stdout -split 'RESUMEN DE INSTALACION',2)[1]
-            if($summary -notmatch '\[OK\]\s+Codex CLI' -or $summary -notmatch '\[OK\]\s+Flask \+ OpenCV'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
+            if($summary -notmatch '\[OK\]\s+Codex CLI' -or $summary -notmatch '\[OK\]\s+Flask \+ OpenCV' -or $summary -notmatch '\[OK\]\s+Render CLI'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
         }
+        if($case -eq 'fresh-setup' -and $calls -notcontains 'archive supabase-native'){throw 'No se probo Supabase ausente con el instalador nativo simulado'}
         if ($case -in @('cancel','diagnostic','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
         if ($case -eq 'update-fail' -and @($calls | Where-Object { $_ -match '^npm install' }).Count -gt 0) { throw 'Se instalo a pesar de fallar el registro' }
         if ($case -eq 'setup-fail' -and $stdout -notmatch '\[X\]') { throw 'No mostro errores de instalacion' }
