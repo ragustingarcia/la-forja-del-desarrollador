@@ -34,10 +34,10 @@ if ($FlowCase) {
         $definition=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $boundary},$true)
         $script:text=$script:text.Replace($definition.Extent.Text, ('function '+$boundary+' { throw ''PROHIBIDO ejecutar binarios o descargar en estos flujos'' }'))
     }
-    if($FlowCase -eq 'fresh-setup'){
-        $resolver=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaToolPath'},$true)
-        $script:text=$script:text.Replace($resolver.Extent.Text, 'function Get-ForjaToolPath {param($Name) if($Name -eq ''supabase''){return $null};return ''C:\fixture\tool.cmd''}')
-    }
+    # La disponibilidad de CLI pertenece al escenario, no al software de la PC anfitriona.
+    # La resolucion real (.exe/.cmd/PATH/nativa) se prueba en native-tools y review.
+    $resolver=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaToolPath'},$true)
+    $script:text=$script:text.Replace($resolver.Extent.Text, 'function Get-ForjaToolPath {param($Name) if($FlowCase -eq ''fresh-setup'' -and $Name -eq ''supabase''){return $null};return ''C:\fixture\tool.cmd''}')
     function global:Clear-Host {}
     function global:Read-Host { param($Prompt)
         $script:answers++
