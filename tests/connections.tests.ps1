@@ -55,11 +55,12 @@ function Write-ForjaProgress {param($Label,$Bytes,$Total,$Frame,[switch]$Complet
 $shell=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $savedCi=$env:CI
 # Source literal para evitar expandir las variables en la consola de la prueba.
-$source='[Console]::WriteLine("CI_VALUE="+$env:CI); $inputPipe=[Console]::OpenStandardInput(); [Console]::WriteLine("INPUT_BYTE="+$inputPipe.ReadByte()); exit 0'
+$source='[Console]::WriteLine("CI_VALUE="+$env:CI); $inputPipe=[Console]::OpenStandardInput(); $memory=New-Object IO.MemoryStream; $inputPipe.CopyTo($memory); [Console]::WriteLine("INPUT_HEX="+[BitConverter]::ToString($memory.ToArray()).Replace("-","")); exit 0'
 $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($source))
 $result=Invoke-ForjaPackageProcess $shell @('-NoProfile','-EncodedCommand',$encoded) 'Fixture stdin' -TimeoutSeconds 5 -NonInteractive
-# Comprobar EOF en el pipe real: Console.In puede devolver cadena vacia en algunos hosts PS5.
-Assert ($result.ExitCode -eq 0 -and ($result.Output -join ' ') -match 'CI_VALUE=true' -and ($result.Output -join ' ') -match 'INPUT_BYTE=-1') ('proceso inerte recibe CI y stdin cerrado sin prompts; exit='+$result.ExitCode+'; salida='+($result.Output -join ' | '))
+# CopyTo debe llegar a EOF. Framework puede agregar un BOM UTF8 al crear su writer;
+# se acepta solo ese marcador de codificacion o cero bytes, nunca entrada de usuario.
+Assert ($result.ExitCode -eq 0 -and ($result.Output -join ' ') -match 'CI_VALUE=true' -and @($result.Output | Where-Object {$_ -match '^INPUT_HEX=(EFBBBF)?$'}).Count -eq 1) ('proceso inerte recibe CI y stdin cerrado sin prompts; exit='+$result.ExitCode+'; salida='+($result.Output -join ' | '))
 Assert ($env:CI -ceq $savedCi) 'CI no se persiste ni se cambia en el proceso padre'
 $peer=$null
 try {

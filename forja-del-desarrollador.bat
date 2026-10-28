@@ -163,7 +163,7 @@ function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$Argume
         $process=New-Object Diagnostics.Process;$process.StartInfo=$psi
         Write-ForjaProgress -Label $Label -Frame 0
         $null=$process.Start()
-        # Cerrar el pipe, sin vaciar un StreamWriter que pueda enviar un preambulo al hijo.
+        # Cerrar el pipe: no se acepta entrada del usuario durante la consulta.
         if($NonInteractive){$process.StandardInput.BaseStream.Close()}
         $readers=@(
             [pscustomobject]@{Reader=$process.StandardOutput;Pending=$process.StandardOutput.ReadLineAsync();Closed=$false},
