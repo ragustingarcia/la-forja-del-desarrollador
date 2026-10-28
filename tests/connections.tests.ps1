@@ -55,10 +55,11 @@ function Write-ForjaProgress {param($Label,$Bytes,$Total,$Frame,[switch]$Complet
 $shell=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $savedCi=$env:CI
 # Source literal para evitar expandir las variables en la consola de la prueba.
-$source='[Console]::WriteLine("CI_VALUE="+$env:CI); [Console]::WriteLine("EOF_VALUE="+([Console]::In.ReadLine() -eq $null)); exit 0'
+$source='[Console]::WriteLine("CI_VALUE="+$env:CI); $inputPipe=[Console]::OpenStandardInput(); [Console]::WriteLine("INPUT_BYTE="+$inputPipe.ReadByte()); exit 0'
 $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($source))
 $result=Invoke-ForjaPackageProcess $shell @('-NoProfile','-EncodedCommand',$encoded) 'Fixture stdin' -TimeoutSeconds 5 -NonInteractive
-Assert ($result.ExitCode -eq 0 -and ($result.Output -join ' ') -match 'CI_VALUE=true' -and ($result.Output -join ' ') -match 'EOF_VALUE=True') ('proceso inerte recibe CI y stdin cerrado sin prompts; exit='+$result.ExitCode+'; salida='+($result.Output -join ' | '))
+# Comprobar EOF en el pipe real: Console.In puede devolver cadena vacia en algunos hosts PS5.
+Assert ($result.ExitCode -eq 0 -and ($result.Output -join ' ') -match 'CI_VALUE=true' -and ($result.Output -join ' ') -match 'INPUT_BYTE=-1') ('proceso inerte recibe CI y stdin cerrado sin prompts; exit='+$result.ExitCode+'; salida='+($result.Output -join ' | '))
 Assert ($env:CI -ceq $savedCi) 'CI no se persiste ni se cambia en el proceso padre'
 $peer=$null
 try {
