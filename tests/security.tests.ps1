@@ -28,6 +28,7 @@ function Assert-Throws { param([scriptblock]$Action, [string]$Message)
 }
 function global:winget {
     $script:wingetArgs = @($args)
+    if($args[0] -eq 'install'){$script:wingetInstallArgs=@($args)}
     if ($script:wingetQueue -and $script:wingetQueue.Count -gt 0) {
         $response=$script:wingetQueue.Dequeue()
         $global:LASTEXITCODE=$response.Code
@@ -80,7 +81,7 @@ try {
     Assert ((Get-WingetUpdateState 'Git.Git') -eq 'update') 'update disponible por ID exacto'
     $result = @(Install-Winget 'Git.Git' 'Git')
     Assert ($result.Count -eq 1 -and $result[0] -eq $true) 'instalacion correcta retorna solo booleano'
-    Assert (($script:wingetArgs -contains '--exact') -and ($script:wingetArgs -contains '--source')) 'winget restringe ID y fuente'
+    Assert (($script:wingetInstallArgs -contains '--exact') -and ($script:wingetInstallArgs -contains '--source')) 'winget restringe ID y fuente'
     $script:mockWingetOutput = 'GitXGit 2.0 2.1'
     Assert ((Get-WingetUpdateState 'Git.Git') -eq 'error') 'regex no confunde otro identificador'
     $script:mockWingetOutput = ''

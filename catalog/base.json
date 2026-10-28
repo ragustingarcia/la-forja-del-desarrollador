@@ -191,9 +191,9 @@
   {
     "Id": "connections",
     "Group": "Integracion",
-    "Name": "Guia de conexiones",
+    "Name": "Comprobar conexiones",
     "Method": "guidance",
-    "Description": "Explica como iniciar sesion en los servicios sin copiar claves en Forja.",
+    "Description": "Revisa cuentas y Docker sin instalar; explica como completar cada acceso.",
     "Package": "",
     "Command": ""
   },

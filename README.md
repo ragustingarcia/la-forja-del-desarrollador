@@ -11,7 +11,7 @@
 
 ## Empezar
 
-Descargá `forja-del-desarrollador.bat` y abrilo con doble clic, **sin ejecutar toda la Forja como administrador**. Arranca con Windows PowerShell 5.1, incluido en Windows. Revisá los permisos de los instaladores de terceros.
+Descargá [forja-del-desarrollador.bat](https://github.com/ragustingarcia/la-forja-del-desarrollador/releases/latest/download/forja-del-desarrollador.bat) y abrilo con doble clic, **sin ejecutar toda la Forja como administrador**. Arranca con Windows PowerShell 5.1, incluido en Windows. Revisá los permisos de los instaladores de terceros.
 
 | Modo | Qué hace |
 |---|---|
@@ -20,7 +20,7 @@ Descargá `forja-del-desarrollador.bat` y abrilo con doble clic, **sin ejecutar 
 | **[3] Diagnóstico** | Muestra rutas, registro Store y ubicaciones de paquetes nativos revisados; no instala ni autentica. |
 | **[4] Stack por proyecto** | Muestra recetas para frontend, Flask/OpenCV, PostGIS y conexiones; no ejecuta esas recetas. |
 | **[5] Catálogo completo** | Lista todas las herramientas por páginas; permite volver al menú sin instalar. |
-| **[T01] … [T49]** | Instala o actualiza únicamente la selección elegida; las guías muestran instrucciones. |
+| **[T01] … [T49]** | Instala o actualiza únicamente la selección elegida; T47 comprueba conexiones y las guías muestran instrucciones. |
 | **[0] / ENTER** | Sale sin cambios. |
 
 El menú es espaciado y está agrupado por categorías. Cada entrada explica para qué sirve en términos simples. Escribí su código (por ejemplo, `T05` para Node.js) para actuar sobre esa herramienta, sin recorrer el setup completo. La selección muestra su explicación y pide confirmación antes de instalar o actualizar.
@@ -37,9 +37,9 @@ No incluye controladores ni aplicaciones de uso diario. Cada agente conserva su 
 
 WinGet, PowerShell 7, WSL, Git, Node.js LTS/npm, pnpm, Python, librerías Python aisladas, VS Code, Claude Code y Desktop, GitHub CLI, Docker Desktop, mongosh, Ollama, FFmpeg, Netlify CLI, Vercel CLI, Supabase CLI y Snyk CLI. Los packs de skills Claude son opcionales y se conservan las skills existentes.
 
-El asistente de conexión de la base conserva los pasos de GitHub, Netlify, Vercel, Supabase, Snyk y Docker. Los servicios nuevos muestran sus comandos oficiales de autenticación para ejecutarlos manualmente. La instalación no crea bases, envía emails, publica dominios ni hace deploys.
+El asistente comprueba GitHub, Netlify, Vercel, Supabase, Snyk y el motor Docker con consultas de hasta 30 segundos por servicio. También se abre directamente con **T47**, sin repetir instalaciones. Los logins se completan en una terminal aparte. Los servicios nuevos muestran sus comandos oficiales de autenticación para ejecutarlos manualmente. La instalación no crea bases, envía emails, publica dominios ni hace deploys.
 
-Vercel se comprueba con `whoami --non-interactive`, entrada cerrada y un límite de 30 segundos. La comprobación no abre un login. Si no confirma la sesión, el asistente explica el motivo, sigue con los otros servicios y muestra `vercel.cmd login` para una terminal separada. Cerrar una pestaña de autenticación no requiere repetir las instalaciones.
+Vercel se comprueba con `whoami --non-interactive`, entrada cerrada y un límite de 30 segundos. La comprobación no abre un login. Si no confirma la sesión, el asistente explica el motivo, sigue con los otros servicios y muestra `vercel.cmd login` para una terminal separada. Cerrar una pestaña de autenticación no requiere repetir las instalaciones. Netlify distingue una cuenta conectada de una carpeta sin sitio vinculado; Supabase acepta una lista de proyectos vacía. Un fallo de red queda sin confirmar, sin afirmar que la cuenta esté desconectada.
 
 ## Elegir el stack ampliado
 
@@ -82,6 +82,7 @@ Los catálogos legibles están en [catalog/base.json](catalog/base.json) y [cata
 - El modo 2 comprueba todas las ramas WinGet contempladas (3.10 a 3.15), sin detenerse en la primera instalada.
 - La rama para instalaciones nuevas de este catálogo es **3.14**, verificada en WinGet. No se presenta como la última versión de Python.org.
 - Si ya tenés otra rama, podés agregar 3.14 en paralelo. No se eliminan versiones, se migra Conda ni se reinstalan los paquetes compartidos.
+- Solo actualizar no crea un entorno Python de Forja ausente. Usá T32 o T34 para prepararlo. Si el venv existe, puede actualizarse sin que el comando global de Python esté en PATH.
 - Las cinco librerías base viven en `%LOCALAPPDATA%\Forja\Python\venv`.
 - Flask, OpenCV y NumPy tienen un perfil opcional separado en `%LOCALAPPDATA%\Forja\Python\web-vision`.
 - Se comprueban aislamiento, `pip check`, presencia e imports. Los proyectos conservan sus venvs; actualizar el intérprete no los migra automáticamente.
@@ -97,7 +98,8 @@ Wrangler sigue la recomendación de Cloudflare de usar una dependencia de desarr
 ## Cómo se actualizan las herramientas
 
 - WinGet usa ID exacto y fuente explícita; se comprueba el registro después de instalar las entradas nuevas del catálogo.
-- Las CLI npm usan el paquete oficial, una versión concreta consultada al registro y comprobación de la CLI. Se evita iniciar una segunda instalación si se detecta otra vía.
+- Claude nativo se reconoce incluso fuera del PATH y sin npm disponible; una copia que no responde queda pendiente y no se tapa instalando otra.
+- Las CLI npm usan el paquete oficial, una versión concreta consultada al registro y comprobación de la CLI. Se evita iniciar una segunda instalación si se detecta otra vía. Un fallo de inventario no se interpreta como ausencia. Se conserva una versión local superior a `latest` o de un canal especial, sin degradarla automáticamente.
 - Cursor Agent, Render y Supabase nativos usan ZIP Windows x64 y SHA-256 revisados. Se validan rutas/enlaces del ZIP antes de extraer y se verifica la versión antes de publicar el directorio. No se ejecutan los scripts remotos de bootstrap.
 - Esos ZIP quedan en `%LOCALAPPDATA%\Forja\Tools\<id>\<version>`. El BAT muestra el comando completo de su launcher. No cambia el PATH persistente ni borra versiones anteriores; una revisión nueva de estos paquetes requiere actualizar el catálogo de Forja.
 - La app ChatGPT/Codex se instala por el ID oficial de Microsoft Store; sus actualizaciones se delegan a Store y aparecen como saltadas, con explicación, en el modo 2.
@@ -112,7 +114,7 @@ La Forja mantiene el guard contra elevación global, confirmaciones, temporales 
 
 No contiene credenciales ni respalda proyectos, bases de datos o volúmenes Docker. Antes de formatear, guardá y verificá esos datos por separado. El inventario personal de una PC no forma parte de este repositorio público.
 
-Leé [SECURITY.md](SECURITY.md), [el detalle de v6.2.0](docs/STACK-IA-v6.2.0.md) y [la auditoría inicial](docs/AUDITORIA-SEGURIDAD-v6.1.md). CI ejecuta pruebas simuladas en PowerShell 5.1 y 7. La descarga, extracción y respuesta de versión de las tres CLI ZIP se comprobaron bajo un directorio de prueba; la instalación completa de todos los proveedores, logins y reinicios en una VM limpia siguen siendo verificaciones separadas.
+Leé [SECURITY.md](SECURITY.md), [el detalle de v6.2.0](docs/STACK-IA-v6.2.0.md) y [la revisión integral](docs/REVISION-v6.2.0.md) y [la auditoría inicial](docs/AUDITORIA-SEGURIDAD-v6.1.md). CI ejecuta pruebas simuladas en PowerShell 5.1 y 7. La descarga, extracción y respuesta de versión de las tres CLI ZIP se comprobaron bajo un directorio de prueba; la instalación completa de todos los proveedores, logins y reinicios en una VM limpia siguen siendo verificaciones separadas.
 
 ## Historial de versiones
 

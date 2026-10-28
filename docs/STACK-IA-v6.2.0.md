@@ -109,7 +109,14 @@ No se revisan ni modifican automáticamente los proyectos al ejecutar el modo 2.
 Wrangler se elige de nuevo su proyecto desde el modo 1. El login de un servicio y el funcionamiento
 de un proyecto se verifican por separado de la instalación de su CLI.
 
-## Recuperar una autenticación Vercel interrumpida
+## Comprobar conexiones y recuperar una autenticación interrumpida
+
+T47 permite consultar las conexiones sin recorrer el setup. Todas las consultas de ese panel
+tienen entrada cerrada y timeout de 30 segundos; los logins se realizan aparte. Netlify se
+comprueba mediante JSON y reconoce `loggedIn: true` con `NOT_LINKED` aunque la CLI devuelva 1.
+Supabase acepta una lista de proyectos vacía; Docker verifica el motor, no una cuenta Hub.
+La salida cruda de cuentas y errores JSON no se copia al resumen.
+
 
 El setup instala/verifica las herramientas antes del asistente de conexiones. Si se interrumpe
 una autenticación en ese último paso, las instalaciones anteriores no se revierten.
@@ -185,8 +192,8 @@ requieren actualizar el catálogo revisado de Forja; no se descargan automática
 
 ## Evidencia y límites
 
-Validación local en PowerShell 5.1 y 7: **327 casos por shell** (84 de seguridad, 18 flujos,
-5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack, 30 de progreso/selección individual, 45 de explicaciones y 22 de conexiones), sin fallos.
+Validación local en PowerShell 5.1 y 7: **367 casos por shell** (84 de seguridad, 19 flujos,
+5 de ejecución nativa, 13 Python, 16 MSI, 96 del catálogo/stack, 31 de progreso/selección individual, 45 de explicaciones, 22 de conexiones y 36 de revisión integral), sin fallos.
 
 Las pruebas aisladas cubren selección y resumen completos, versiones Python coexistentes, rechazo
 de instalación de una rama nueva, confirmación fallida, separación de Flask/OpenCV, paquetes npm
@@ -219,3 +226,5 @@ datos privados del inventario personal ni promete reconstruir proyectos o bases 
 - [Release Render 2.33.0](https://github.com/render-oss/cli/releases/tag/v2.33.0) y [Supabase 2.122.0](https://github.com/supabase/cli/releases/tag/v2.122.0).
 - [Wrangler por proyecto](https://developers.cloudflare.com/workers/wrangler/install-and-update/).
 - [Python para Windows](https://www.python.org/downloads/windows/), [Vite](https://vite.dev/guide/), [Tailwind con Vite](https://tailwindcss.com/docs/installation/using-vite) y [PostGIS en Windows](https://postgis.net/documentation/getting_started/install_windows/).
+
+La [revisión integral](REVISION-v6.2.0.md) detalla correcciones, pruebas y límites de validación.

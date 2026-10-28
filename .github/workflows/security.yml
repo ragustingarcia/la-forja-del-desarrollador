@@ -34,3 +34,4 @@ jobs:
           ./tests/progress-individual.tests.ps1
           ./tests/outcomes.tests.ps1
           ./tests/connections.tests.ps1
+          ./tests/review.tests.ps1

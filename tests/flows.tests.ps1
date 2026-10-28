@@ -19,6 +19,8 @@ if ($FlowCase) {
     $script:text=$script:text.Replace($packageOperation.Extent.Text,'function Invoke-ForjaPackageProcess {param($Executable,$ArgumentList,$Label) $output=@(Invoke-FakeTool -Name ([IO.Path]::GetFileNameWithoutExtension($Executable)) -Arguments $ArgumentList);return [pscustomobject]@{ExitCode=$LASTEXITCODE;Output=$output}}')
     $sessionProbe=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaVercelSession'},$true)
     $script:text=$script:text.Replace($sessionProbe.Extent.Text,'function Get-ForjaVercelSession {param($TimeoutSeconds) $null=Invoke-FakeTool -Name vercel -Arguments @(''whoami'',''--non-interactive'');return [pscustomobject]@{State=''pending'';Reason=''FIXTURE_SESSION_CANCELLED'';User=$null}}')
+    $serviceProbe=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaServiceSession'},$true)
+    $script:text=$script:text.Replace($serviceProbe.Extent.Text,'function Get-ForjaServiceSession {param($Name) $script:calls.Add((''connection-check ''+$Name));return [pscustomobject]@{State=''pending'';Reason=''FIXTURE_OFFLINE''}}')
     $libraries=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPythonLibraries' },$true)
     if (-not $libraries) { throw 'Falta frontera de librerias Python' }
     $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update,[string]$Profile) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
@@ -57,6 +59,7 @@ if ($FlowCase) {
                 'single-node' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'node').Code }
                 'single-cancel' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'node').Code }
                 'single-guide' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'postgis-guide').Code }
+                'single-connections' { return 'T47' }
                 'single-invalid' { return 'T99' }
                 default { return '' }
             }
@@ -118,7 +121,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','catalog','catalog-return','single-node','single-cancel','single-guide','single-invalid','invalid')) {
+    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','catalog','catalog-return','single-node','single-cancel','single-guide','single-connections','single-invalid','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -130,11 +133,12 @@ try {
         if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "Timeout $case" }
         $stdout = $stdoutTask.Result; $stderr = $stderrTask.Result
         $expected = 0
-        if ($case -in @('setup-fail','update-fail','cleanup-fail')) { $expected = 1 }
+        if ($case -in @('setup-fail','update-fail','cleanup-fail','single-connections')) { $expected = 1 }
         if ($p.ExitCode -ne $expected -or $stderr) { throw "$case : exit=$($p.ExitCode) esperado=$expected`n$stderr`n$stdout" }
         $calls = @(Get-Content -LiteralPath $evidencePath)
         if ($case -eq 'project-guide' -and ($calls.Count -gt 0 -or $stdout -notmatch 'STACK POR PROYECTO')) { throw 'La guia de stack debe funcionar sin ejecutar herramientas' }
         if($case -eq 'setup-ok' -and ($stdout -notmatch 'FIXTURE_SESSION_CANCELLED' -or $stdout -notmatch 'ESTADO FINAL DE CONEXIONES' -or @($calls | Where-Object {$_ -eq 'vercel login'}).Count -gt 0)){throw 'Un login Vercel pendiente bloquea el final o vuelve a abrir el login'}
+        if($case -eq 'single-connections' -and ($calls.Count -ne 6 -or @($calls | Where-Object {$_ -notmatch '^(connection-check |vercel whoami)'}).Count -gt 0 -or $stdout -notmatch 'FIXTURE_OFFLINE' -or $stdout -match 'RESUMEN DE INSTALACION')){throw 'T47 no debe instalar ni repetir el setup; debe completar los seis servicios aun sin conexion'}
         if ($case -eq 'stack-selected' -and ($stdout -notmatch 'Codex CLI' -or @($calls | Where-Object {$_ -like '*@openai/codex*'}).Count -eq 0)) { throw 'La seleccion de agentes no recorrio Codex CLI' }
         if ($case -eq 'stack-selected') {
             $summary=($stdout -split 'RESUMEN DE INSTALACION',2)[1]

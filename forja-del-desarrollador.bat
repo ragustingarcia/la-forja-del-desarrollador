@@ -66,7 +66,15 @@ function Test-FastapiInstalled {
     return $false
 }
 function Test-NpmPkg { param($pkg)
-    try { $o = (Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1) | Out-String; if ($LASTEXITCODE -eq 0 -and $o -match ([regex]::Escape($pkg) + "@")) { return $true } } catch {}
+    $script:ForjaNpmQueryFailed=$false
+    try {
+        $output=Invoke-ForjaTool npm list -g $pkg --depth=0 2>&1 | Out-String
+        $code=$LASTEXITCODE
+        if($code -eq 0 -and $output -match ([regex]::Escape($pkg)+'@')){return $true}
+        # npm ls devuelve 1 para un filtro ausente. Otros fallos no prueban ausencia.
+        if($code -in @(0,1) -and $output -match '(?im)^\s*(?:[+`\-├└─│ ]+)?\(empty\)\s*$'){return $false}
+    } catch {}
+    $script:ForjaNpmQueryFailed=$true
     return $false
 }
 function Format-ForjaProgress {param([string]$Label,[long]$Bytes=0,[long]$Total=-1,[int]$Frame=0,[switch]$Completed,[switch]$Failed)
@@ -143,7 +151,7 @@ function ConvertTo-ForjaNativeArgument {param([AllowEmptyString()][string]$Value
     if($Value -and $Value -notmatch '[\s"]'){return $Value}
     return ('"'+(($Value -replace '(\\*)"','$1$1\"') -replace '(\\+)$','$1$1')+'"')
 }
-function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$ArgumentList,[string]$Label='Instalando',[ValidateRange(0,3600)][int]$TimeoutSeconds=0,[switch]$NonInteractive)
+function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$ArgumentList,[string]$Label='Instalando',[ValidateRange(0,3600)][int]$TimeoutSeconds=0,[switch]$NonInteractive,[switch]$Query)
     $process=$null;$frame=0;$timedOut=$false;$timer=[Diagnostics.Stopwatch]::StartNew()
     try {
         # npm se ejecuta con Node directamente: no hay cmd /c ni interpolacion de rutas.
@@ -165,9 +173,11 @@ function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$Argume
         $null=$process.Start()
         # Cerrar el pipe: no se acepta entrada del usuario durante la consulta.
         if($NonInteractive){$process.StandardInput.BaseStream.Close()}
+        $stdoutLines=New-Object 'System.Collections.Generic.List[string]'
+        $stderrLines=New-Object 'System.Collections.Generic.List[string]'
         $readers=@(
-            [pscustomobject]@{Reader=$process.StandardOutput;Pending=$process.StandardOutput.ReadLineAsync();Closed=$false},
-            [pscustomobject]@{Reader=$process.StandardError;Pending=$process.StandardError.ReadLineAsync();Closed=$false}
+            [pscustomobject]@{Channel=$stdoutLines;Reader=$process.StandardOutput;Pending=$process.StandardOutput.ReadLineAsync();Closed=$false},
+            [pscustomobject]@{Channel=$stderrLines;Reader=$process.StandardError;Pending=$process.StandardError.ReadLineAsync();Closed=$false}
         )
         $captured=New-Object 'System.Collections.Generic.List[string]'
         $afterExit=$null;$phase=$Label
@@ -184,7 +194,7 @@ function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$Argume
                     try {$line=$reader.Pending.GetAwaiter().GetResult()}
                     catch {$reader.Closed=$true;break}
                     if($null -eq $line){$reader.Closed=$true;break}
-                    $captured.Add($line);$batch++
+                    $captured.Add($line);$reader.Channel.Add($line);$batch++
                     if($line -match '(?i)Downloading|Descargando'){$phase='Descargando '+$Label}
                     elseif($line -match '(?i)Starting package install|Iniciando.*instal|Installing|Instalando'){$phase='Instalando '+$Label}
                     $reader.Pending=$reader.Reader.ReadLineAsync()
@@ -205,8 +215,9 @@ function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$Argume
         $text=($captured -join "`n") -replace '\x1b\[[0-?]*[ -/]*[@-~]',''
         $lines=@($text -split '[\r\n]+' | ForEach-Object {($_ -replace '[\x00-\x08\x0b\x0c\x0e-\x1f]','').TrimEnd()} | Where-Object {$_ -and $_.Trim() -notmatch '^[|/\\ -]+$'})
         $code=-2;if(-not $timedOut){$code=$process.ExitCode}
-        Write-ForjaProgress -Label $Label -Frame ($frame+1) -Completed:($code -eq 0) -Failed:($code -ne 0)
-        return [pscustomobject]@{ExitCode=$code;Output=$lines;TimedOut=$timedOut}
+        if($Query -and -not $timedOut){Write-ForjaProgress -Label 'Consulta terminada' -Completed}
+        else {Write-ForjaProgress -Label $Label -Frame ($frame+1) -Completed:($code -eq 0) -Failed:($code -ne 0)}
+        return [pscustomobject]@{ExitCode=$code;Output=$lines;Stdout=($stdoutLines -join "`n");Stderr=($stderrLines -join "`n");TimedOut=$timedOut}
     } catch {Write-ForjaProgress -Label $Label -Frame ($frame+1) -Failed;Write-Warn $_.Exception.Message;return [pscustomobject]@{ExitCode=-1;Output=@();TimedOut=$timedOut}}
     finally {if($process){$process.Dispose()};$timer.Stop()}
 }
@@ -228,6 +239,10 @@ function Invoke-ForjaGitTransfer {param([string[]]$ArgumentList)
 function Get-ForjaToolPath { param(
     [ValidateSet('npm','pnpm','claude','netlify','vercel','supabase','snyk','codex','gemini','neon','resend')][string]$Name
 )
+    if($Name -eq 'claude'){
+        $native=Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+        if(Test-Path -LiteralPath $native -PathType Leaf){return $native}
+    }
     # Para paquetes npm, elegir el shim de ese gestor antes que otra copia de Scoop.
     if ($Name -in @('supabase','codex','gemini','neon','resend')) {
         $npmShim=Join-Path $env:APPDATA ('npm\'+$Name+'.cmd')
@@ -270,6 +285,111 @@ function Invoke-ForjaTool { param([string]$Name)
     }
     $global:LASTEXITCODE = $code
 }
+function Get-ForjaConnectionCommand {param([ValidateSet('gh','netlify','supabase','snyk','docker')][string]$Name)
+    if($Name -in @('gh','docker')){$path=Get-ForjaStackCommand $Name}else{$path=Get-ForjaToolPath $Name}
+    if(-not $path){return $null}
+    if([IO.Path]::GetExtension($path) -ieq '.exe'){return [pscustomobject]@{Executable=$path;Arguments=@()}}
+    # Solo entradas conocidas: no interpretar shims .cmd ni package.json como codigo.
+    if($Name -eq 'supabase'){
+        $tool=Get-ForjaStackCatalog | Where-Object Id -eq 'supabase-native'
+        $root=Get-ForjaManagedRoot $tool
+        if($path -ieq (Join-Path $root $tool.Launcher)){
+            $exe=Join-Path $root $tool.Executable
+            Assert-NoReparsePath $exe
+            if(Test-Path -LiteralPath $exe -PathType Leaf){return [pscustomobject]@{Executable=$exe;Arguments=@()}}
+        }
+    }
+    $entries=@{netlify='netlify-cli\bin\run.js';snyk='snyk\bin\snyk';supabase='supabase\dist\supabase.js'}
+    if([IO.Path]::GetExtension($path) -ine '.cmd' -or -not $entries.ContainsKey($Name)){throw 'Este formato requiere comprobar la conexion con su gestor original.'}
+    $entry=Join-Path (Split-Path $path -Parent) ('node_modules\'+$entries[$Name])
+    Assert-NoReparsePath $entry
+    if(-not (Test-Path -LiteralPath $entry -PathType Leaf)){throw 'No se encontro la entrada oficial junto al comando; conserva su gestor y verifica manualmente.'}
+    $node=Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    return [pscustomobject]@{Executable=$node.Source;Arguments=@($entry)}
+}
+function Get-ForjaServiceSession {param([ValidateSet('gh','netlify','supabase','snyk','docker')][string]$Name)
+    $queries=@{gh=@('auth','status','--active');netlify=@('status','--json');supabase=@('projects','list','--output','json');snyk=@('whoami','--experimental');docker=@('info','--format','{{json .ServerVersion}}')}
+    try {
+        $command=Get-ForjaConnectionCommand $Name
+        if(-not $command){return [pscustomobject]@{State='missing';Reason='No se detecto un comando disponible en las rutas revisadas.'}}
+        $result=Invoke-ForjaPackageProcess $command.Executable (@($command.Arguments)+$queries[$Name]) ('Comprobando '+$Name) -TimeoutSeconds 30 -NonInteractive -Query
+        if($result.TimedOut){return [pscustomobject]@{State='timeout';Reason='La comprobacion supero 30 segundos. No se confirma el estado; los otros pasos continuan.'}}
+        $output=($result.Output -join "`n").Trim()
+        if($null -ne $result.Stdout){$output=$result.Stdout.Trim()}
+        $confirmed=$false;$reason='La consulta confirmo el acceso al servicio.'
+        if($Name -eq 'netlify'){
+            # Fuera de un proyecto, Netlify devuelve 1 + NOT_LINKED aunque la cuenta sea valida.
+            $data=$output | ConvertFrom-Json -ErrorAction Stop
+            $confirmed=($data.loggedIn -is [bool] -and $data.loggedIn -eq $true -and ($result.ExitCode -eq 0 -or ($result.ExitCode -eq 1 -and $data.error.code -ceq 'NOT_LINKED')))
+            if($confirmed -and -not $data.linked){$reason='Cuenta conectada. Esta carpeta no esta vinculada a un sitio; eso se hace dentro de cada proyecto con netlify.cmd link.'}
+        } elseif($Name -eq 'supabase'){
+            $null=$output | ConvertFrom-Json -ErrorAction Stop
+            $confirmed=($result.ExitCode -eq 0 -and $output.StartsWith('[') -and $output.EndsWith(']'))
+            $reason='La API acepto la consulta de proyectos. Una lista vacia tambien es una conexion valida.'
+        } elseif($Name -eq 'docker'){
+            $version=$output | ConvertFrom-Json -ErrorAction Stop
+            $confirmed=($result.ExitCode -eq 0 -and $version -is [string] -and $version -match '^\d+\.\d+')
+            $reason='El motor Docker respondio. Esto no comprueba el login de Docker Hub.'
+        } else {$confirmed=($result.ExitCode -eq 0)}
+        if($confirmed){return [pscustomobject]@{State='connected';Reason=$reason}}
+        return [pscustomobject]@{State='pending';Reason=('No se confirmo el acceso (codigo '+$result.ExitCode+'). Puede faltar la sesion, haber expirado o fallar la red; no se asume que necesites reinstalar.')}
+    } catch {
+        # Nunca copiar stdout, tokens, datos de cuenta ni errores del parser JSON al resumen.
+        return [pscustomobject]@{State='pending';Reason='No se pudo interpretar o ejecutar la comprobacion. Verifica desde una terminal con el comando indicado.'}
+    }
+}
+function Show-ForjaConnections {
+    Write-Section 'ESTADO FINAL DE CONEXIONES'
+    Write-Info 'Consultas de hasta 30 segundos por servicio, sin abrir logins. No reinstalan herramientas.'
+    $entries=@(
+        @{Name='GitHub CLI';Key='gh';Code='T42';Login='gh auth login';Check='gh auth status --active'},
+        @{Name='Netlify';Key='netlify';Code='T21';Login='netlify.cmd login';Check='netlify.cmd status --json'},
+        @{Name='Vercel';Key='vercel';Code='T22';Login='vercel.cmd login';Check='vercel.cmd whoami --non-interactive'},
+        @{Name='Supabase';Key='supabase';Code='T23';Login='supabase login';Check='supabase projects list --output json'},
+        @{Name='Snyk';Key='snyk';Code='T45';Login='snyk.cmd auth';Check='snyk.cmd whoami --experimental'},
+        @{Name='Docker';Key='docker';Code='T29';Login='Abri Docker Desktop y espera a que el motor este listo.';Check='docker info'}
+    )
+    $pending=0
+    foreach($entry in $entries){
+        if($entry.Key -eq 'vercel'){$session=Get-ForjaVercelSession}else{$session=Get-ForjaServiceSession $entry.Key}
+        $reason=$session.Reason;$next='No requiere otra accion para esta comprobacion.';$state='aldia';$kind=''
+        if($session.State -ne 'connected'){
+            $pending++;$state='pendiente'
+            if($session.State -eq 'missing'){$kind='absent';$next='Instala la CLI con '+$entry.Code+' si vas a usar este servicio.'}
+            else {
+                $login=$entry.Login;$check=$entry.Check
+                if($entry.Key -eq 'supabase'){
+                    $path=$null;try {$path=Get-ForjaToolPath supabase}catch {}
+                    if($path){$quoted="& '"+$path.Replace("'","''")+"'";$login=$quoted+' login';$check=$quoted+' projects list --output json'}
+                }
+                $next='En una terminal aparte: '+$login+'. Despues: '+$check+'.'
+            }
+        }
+        $null=Set-ForjaOutcome $state $reason $next $kind
+        $record=New-ForjaStepResult ([pscustomobject]@{Id=('connection-'+$entry.Key);Name=$entry.Name;Code=$entry.Code}) $state
+        if($session.State -eq 'connected'){$record.Label='CONEXION VERIFICADA'}
+        Write-ForjaStepResult $record
+    }
+    Write-Info 'Si cerraste una pestana de login, repeti solo ese login en otra terminal. Para revisar conexiones usa T47.'
+    Write-Dim 'Vincular cuentas es opcional. No hace falta repetir el setup ni conectar servicios que no uses.'
+    Write-Dim 'MCP de GitHub es opcional: https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md'
+    Write-Dim 'Forja no solicita ni guarda tokens. Los permisos y credenciales se gestionan con cada proveedor.'
+    if($pending){return (Set-ForjaOutcome 'pendiente' ($pending.ToString()+' servicios sin conexion confirmada; consulta sus motivos arriba.') 'Completa solo los servicios que uses y vuelve a T47.')}
+    return (Set-ForjaOutcome 'aldia' 'Las seis comprobaciones respondieron correctamente.' 'Las cuentas de otros servicios se vinculan segun el proyecto.')
+}
+function Invoke-ForjaClaudeInstall {
+    # La copia nativa no depende de npm ni de que .local\bin ya este en PATH.
+    if(Get-ForjaToolPath claude){
+        $version=Invoke-ForjaTool claude --version | Out-String
+        if($LASTEXITCODE -eq 0 -and $version -match '\d+\.\d+\.\d+'){
+            return (Set-ForjaOutcome 'aldia' ('Claude responde: '+$version.Trim()+'. Se conserva su instalacion.') 'Usa T16 o el modo 2 cuando quieras actualizarlo.')
+        }
+        return (Set-ForjaOutcome 'pendiente' 'Se encontro Claude pero no confirma una version operativa; no se agrega otra copia.' 'Revisa claude doctor desde una terminal nueva y conserva su gestor original.')
+    }
+    $entry=[pscustomobject]@{Name='Claude Code CLI';Package='@anthropic-ai/claude-code';Command='claude'}
+    return (Invoke-ForjaCatalogNpm $entry)
+}
+
 function Get-ForjaVercelProbeCommand {
     $path=Get-ForjaToolPath vercel
     if(-not $path){return $null}
@@ -287,13 +407,13 @@ function Get-ForjaVercelSession {param([ValidateRange(1,60)][int]$TimeoutSeconds
         $command=Get-ForjaVercelProbeCommand
         if(-not $command){return [pscustomobject]@{State='missing';Reason='No se detecto la CLI de Vercel en las rutas revisadas.';User=$null}}
         $arguments=@($command.Arguments)+@('whoami','--non-interactive','--no-color')
-        $result=Invoke-ForjaPackageProcess $command.Executable $arguments 'Verificando Vercel' -TimeoutSeconds $TimeoutSeconds -NonInteractive
+        $result=Invoke-ForjaPackageProcess $command.Executable $arguments 'Verificando Vercel' -TimeoutSeconds $TimeoutSeconds -NonInteractive -Query
         if($result.TimedOut){return [pscustomobject]@{State='timeout';Reason='La consulta de sesion supero el tiempo limite. No se pudo confirmar la conexion; la Forja continua.';User=$null}}
         if($result.ExitCode -ne 0){return [pscustomobject]@{State='pending';Reason=('Vercel no confirmo una sesion activa (codigo '+$result.ExitCode+'). Puede faltar el login, haber expirado o fallar la consulta de red.');User=$null}}
         $users=@($result.Output | ForEach-Object {$_.Trim()} | Where-Object {$_ -match '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' -and $_ -notmatch '^(Error|Warning|undefined|null)$'})
         if($users.Count -ne 1){return [pscustomobject]@{State='pending';Reason='La CLI termino, pero su salida no permite confirmar un usuario unico. No se marca como conectado.';User=$null}}
         return [pscustomobject]@{State='connected';Reason='Vercel confirmo la sesion mediante una consulta sin interaccion.';User=$users[0]}
-    } catch {return [pscustomobject]@{State='pending';Reason=$_.Exception.Message;User=$null}}
+    } catch {return [pscustomobject]@{State='pending';Reason='No se pudo ejecutar la comprobacion; verifica la CLI desde una terminal nueva.';User=$null}}
 }
 function Show-ForjaVercelConnection {
     Write-Info 'Vercel: comprobacion sin abrir el navegador (maximo 30 segundos)...'
@@ -360,19 +480,24 @@ function Test-WingetPkg { param($id)
 }
 function Install-Winget { param($id, $nombre)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
+        $before=Get-WingetPackageInfo $id
+        if($before.State -eq 'error'){Write-Warn ('No se instala porque fallo el inventario: '+$before.Detail);return $false}
         Write-Info "[INSTALANDO] $nombre via winget..."
         Write-Host ""
         Invoke-ForjaWingetOperation @('install','--id',$id,'--exact','--source','winget','--accept-package-agreements','--accept-source-agreements') $nombre 2>&1 | ForEach-Object { Write-Host "  $_" }
-        return ($LASTEXITCODE -eq 0)
+        if($LASTEXITCODE -ne 0){return $false}
+        $script:ForjaWingetInventory=$null
+        $after=Get-WingetPackageInfo $id
+        if($after.State -ne 'installed'){Write-Warn 'El instalador termino pero no se confirmo el registro; revisa el gestor antes de reintentar.';return $false}
+        return $true
     }
     return $false
 }
 function Install-Npm { param($pkg, $nombre)
-    Write-Info "[INSTALANDO] $nombre via npm..."
-    Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-    Invoke-ForjaTool npm install -g $pkg --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
-    Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-    return ($LASTEXITCODE -eq 0 -and (Test-NpmPkg $pkg))
+    $commands=@{'netlify-cli'='netlify';vercel='vercel';snyk='snyk';pnpm='pnpm';'@anthropic-ai/claude-code'='claude'}
+    if(-not $commands.ContainsKey($pkg)){Write-Warn 'Paquete npm fuera del catalogo de instalacion base.';return $false}
+    $state=Invoke-ForjaCatalogNpm ([pscustomobject]@{Name=$nombre;Package=$pkg;Command=$commands[$pkg]})
+    return ($state -in @('ok','aldia','ok-aviso'))
 }
 function Ask-SN { param($pregunta)
     $r = Read-Host "  $pregunta (S/N)"
@@ -677,12 +802,19 @@ function Invoke-ForjaPython { param([string]$Executable)
 }
 function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShared,[ValidateSet('base','web-vision')][string]$Profile='base')
     $result=[pscustomobject]@{ State='error'; SharedConflict=$false; Environment=$null }
-    $base=Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $base) { Write-Warn 'Python no disponible.'; $result.State='saltado'; return $result }
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { Write-Warn 'LOCALAPPDATA no disponible.'; return $result }
     $venvName='venv';if($Profile -eq 'web-vision'){$venvName='web-vision'}
     $expectedVenv=Join-Path $env:LOCALAPPDATA ('Forja\Python\'+$venvName)
-    if ($CheckShared -or ($Profile -eq 'base' -and -not (Test-Path -LiteralPath $expectedVenv))) {
+    if($Update -and -not (Test-Path -LiteralPath $expectedVenv)){
+        $result.State=Set-ForjaOutcome 'saltado' 'No existe este entorno de Forja. Solo actualizar no crea entornos nuevos.' 'Elegi T32 (base) o T34 (Flask/OpenCV) para prepararlo.' 'absent'
+        return $result
+    }
+    $base=Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if(-not $base -and -not (Test-Path -LiteralPath $expectedVenv)){
+        $result.State=Set-ForjaOutcome 'pendiente' 'No se detecto Python para crear el entorno aislado.' 'Instala Python con T07 y reabri Forja.'
+        return $result
+    }
+    if ($base -and ($CheckShared -or ($Profile -eq 'base' -and -not (Test-Path -LiteralPath $expectedVenv)))) {
         $shared=Invoke-ForjaPython $base.Source -m pip check 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) {
             $result.SharedConflict=$true
@@ -804,6 +936,9 @@ function Invoke-NpmUpdate { param($pkg, $nombre)
         if (-not (Test-NpmRuntime $pkg $vLocal)) { Write-Warn "${nombre}: la version figura instalada pero el comando no responde correctamente."; return 'error' }
         Write-OK "$nombre ya esta al dia ($vLocal)."
         return "aldia"
+    }
+    if($vLocal -notmatch '^\d+\.\d+\.\d+$' -or $vUltima -notmatch '^\d+\.\d+\.\d+$' -or [version]$vLocal -gt [version]$vUltima){
+        return (Set-ForjaOutcome 'pendiente' ('Version local '+$vLocal+' y version del canal latest '+$vUltima+'. No se baja de version ni se cambia un canal especial automaticamente.') 'Revisa el canal elegido y actualiza con su gestor si corresponde.')
     }
     Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
     $npmOutput=New-Object 'System.Collections.Generic.List[string]'
@@ -1327,7 +1462,9 @@ function Invoke-ForjaArchiveTool { param($Tool,[switch]$Update)
 }
 function Invoke-ForjaCatalogNpm { param($Tool,[switch]$Update)
     if(-not (Get-ForjaToolPath npm)){Write-Warn 'npm no disponible.';return (Set-ForjaOutcome 'pendiente' 'npm no esta disponible para gestionar esta CLI.' 'Verifica Node.js/npm con T05 y reabri la Forja.')}
+    $script:ForjaNpmQueryFailed=$false
     if(Test-NpmPkg $Tool.Package){return (Invoke-NpmUpdate $Tool.Package $Tool.Name)}
+    if($script:ForjaNpmQueryFailed){return (Set-ForjaOutcome 'error' 'Fallo la consulta de paquetes npm globales. No se confunde el fallo con una herramienta ausente.' 'Revisa npm list -g --depth=0 y reintenta; no se inicio otra instalacion.')}
     if(Get-ForjaStackCommand $Tool.Command){Write-Warn "$($Tool.Name) usa otro instalador. No se agrega una segunda copia.";return (Set-ForjaOutcome 'pendiente' 'El comando existe por otro instalador. No se agrego una segunda copia npm.' 'Usa el actualizador de esa instalacion; la presencia del comando no confirma que este al dia.' 'external')}
     if($Update){return (Set-ForjaOutcome 'saltado' ('No se detecto '+$Tool.Package+' como paquete npm global ni su comando en las rutas revisadas. El modo 2 no instala selecciones nuevas.') 'Elegi el codigo T de esta herramienta para instalarla individualmente.' 'absent')}
     $version=((Invoke-ForjaTool npm view $Tool.Package version | Out-String).Trim())
@@ -1746,9 +1883,9 @@ function Get-ForjaBaseCatalog {
   {
     "Id": "connections",
     "Group": "Integracion",
-    "Name": "Guia de conexiones",
+    "Name": "Comprobar conexiones",
     "Method": "guidance",
-    "Description": "Explica como iniciar sesion en los servicios sin copiar claves en Forja.",
+    "Description": "Revisa cuentas y Docker sin instalar; explica como completar cada acceso.",
     "Package": "",
     "Command": ""
   },
@@ -1920,7 +2057,7 @@ function Invoke-ForjaIndividualTool {param($Tool)
                 $script:ForjaWingetInventory=$null;$after=Get-WingetPackageInfo 'Python.Python.3.14'
                 if($after.State -eq 'installed'){return 'ok'};return 'pendiente'
             }
-            'python-libraries' {$result=Invoke-ForjaPythonLibraries -Update;return $result.State}
+            'python-libraries' {$exists=Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Forja\Python\venv');$result=Invoke-ForjaPythonLibraries -Update:$exists;return $result.State}
             'claude-runtime' {
                 $command=Get-ForjaToolPath claude
                 if(-not $command){$entry=[pscustomobject]@{Name='Claude Code CLI';Package='@anthropic-ai/claude-code';Command='claude'};return (Invoke-ForjaCatalogNpm $entry)}
@@ -1941,6 +2078,10 @@ function Invoke-ForjaIndividualTool {param($Tool)
                 }
                 return (Invoke-ForjaWslInstall)
             }
+            'python-venv' {
+                $exists=Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Forja\Python\web-vision')
+                $result=Invoke-ForjaPythonLibraries -Update:$exists -Profile 'web-vision';return $result.State
+            }
             'skills' {return (Invoke-ForjaSkillsTool)}
             'guidance' {
                 switch($Tool.Id){
@@ -1957,7 +2098,8 @@ function Invoke-ForjaIndividualTool {param($Tool)
                         Write-Info 'Para un proyecto nuevo: npm create vite@latest mi-app -- --template react-ts'
                         Write-Info 'Trabaja en esa carpeta y configura Tailwind segun su guia. Forja no crea ni modifica el proyecto.'
                     }
-                    default {Show-ForjaProjectStack;Write-Info 'Otros accesos: gh auth login | netlify login | vercel login | supabase login | snyk auth'}
+                    'connections' {return (Show-ForjaConnections)}
+                    default {Show-ForjaProjectStack}
                 }
                 return 'guia'
             }
@@ -2161,7 +2303,7 @@ if ($modoSel -eq "2") {
         }
     }
 
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
+    if (Get-ForjaToolPath claude) {
         $claudeBefore=$null
         $beforeOutput=Invoke-ForjaTool claude --version 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0 -and $beforeOutput -match '\d+\.\d+\.\d+') { $claudeBefore=$Matches[0] }
@@ -2516,51 +2658,14 @@ if (Get-Command code -ErrorAction SilentlyContinue) {
 #  [10] CLAUDE CODE CLI
 # ============================================================
 Write-Titulo 10 $T "Claude Code CLI" "IA que desarrolla con vos"
-Write-Host "  Herramienta central. Lee, escribe y testea codigo."
+Write-Host "  Agente de IA que lee, escribe y prueba codigo."
 Write-Host '  Ej: claude | claude "crea un componente Card en React"'
 Write-Host ""
 Write-Info "Verificando..."
 Write-Host ""
 
-$env:PATH = "$env:PATH;$env:ProgramFiles\nodejs;$env:APPDATA\npm"
-$nm = Get-Command npm -ErrorAction SilentlyContinue
-if (-not $nm) {
-    Write-Warn "npm no disponible. Reinicia y corre el script de nuevo."
-    $status["claude"] = "PENDIENTE"
-    $necesitaReabrir = $true
-} else {
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        Write-OK "Claude Code ya instalado."
-        $status["claude"] = "OK"
-    } else {
-        Write-Info "[INSTALANDO] Claude Code (puede tardar 3-8 min)..."
-        Write-Dim "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
-        Invoke-ForjaTool npm install -g @anthropic-ai/claude-code --loglevel verbose 2>&1 | ForEach-Object { Write-Host "  $_" }
-        Write-Dim "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
-        $env:PATH = "$env:PATH;$env:APPDATA\npm"
-        if ($LASTEXITCODE -eq 0 -and (Get-Command claude -ErrorAction SilentlyContinue)) {
-            Write-OK "Instalado."
-            $status["claude"] = "OK"
-        } else {
-            Write-Err "Error instalando Claude Code."
-            $status["claude"] = "ERROR"
-        }
-    }
-
-    if ($status["claude"] -eq "OK") {
-        Write-Host ""
-        Write-Separador
-        Write-Info "Verificando instalacion..."
-        # claude doctor es interactivo (TUI): no sirve en un script desatendido
-        try {
-            $cv = (Invoke-ForjaTool claude --version 2>&1) | Out-String
-            if ($cv -match "\d+\.\d+") { Write-OK "Claude Code responde ($($cv.Trim()))." }
-            else { Write-Warn "Instalado pero no responde. Corre 'claude doctor' en una terminal nueva." }
-        } catch {
-            Write-Warn "No se pudo verificar. Corre 'claude doctor' en una terminal nueva."
-        }
-    }
-}
+$claudeResult=Invoke-ForjaExplainedStep (Get-ForjaSelection -Id 'claude-code') {Invoke-ForjaClaudeInstall}
+$status['claude']=@{ok='OK';aldia='OK';'ok-aviso'='OK';error='ERROR';pendiente='PENDIENTE';saltado='SALTADO'}[$claudeResult.State]
 
 # ============================================================
 #  [11] CLAUDE DESKTOP
@@ -2929,178 +3034,14 @@ Write-Host ""
 Write-Section "------------------------------------------------------------"
 Write-Host ""
 
-$conexiones = @{}
-
-# --- GITHUB CLI ---
-Write-Info "GitHub CLI (gh)..."
-try {
-    $ghs = (gh auth status 2>&1) | Out-String
-    if ($LASTEXITCODE -eq 0) { Write-OK "GitHub CLI: Conectado"; $conexiones["GitHub CLI"] = "OK" } else { throw }
-} catch {
-    Write-Warn "GitHub CLI: No conectado"
-    $conexiones["GitHub CLI"] = "PENDIENTE"
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
-        Write-Host ""
-        Write-Host "  GitHub CLI gestiona repos, PRs e issues desde la terminal." -ForegroundColor White
-        Write-Host "  Claude Code lo usa internamente para crear repos y PRs." -ForegroundColor White
-        Write-Host ""
-        if (Ask-SN "Conectar GitHub CLI ahora?") {
-            Write-Host ""
-            Write-Info "Se va a abrir el navegador para loguearte en GitHub."
-            Write-Host ""
-            gh auth login
-            try {
-                $check = (gh auth status 2>&1) | Out-String
-                if ($LASTEXITCODE -eq 0) { Write-OK "GitHub CLI conectado!"; $conexiones["GitHub CLI"] = "OK" }
-            } catch {}
-        }
-    }
-}
-
-# --- CLAUDE MCP GITHUB ---
-Write-Host ""
-Write-Separador
-Write-Info "Claude MCP — GitHub server..."
-$conexiones['Claude MCP'] = 'OPCIONAL - MANUAL'
-Write-Info 'GitHub CLI ya permite trabajar con repositorios desde Claude Code.'
-Write-Dim 'El MCP es opcional; la Forja no solicita ni guarda tokens de GitHub.'
-Write-Dim 'Configura el servidor mantenido por GitHub siguiendo su guia oficial:'
-Write-Dim 'https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md'
-Write-Dim 'Limita repositorios, permisos y herramientas; empeza en modo solo lectura.'
-Write-Warn 'Si usaste v6.0: revisa el PAT anterior y GITHUB_PERSONAL_ACCESS_TOKEN. Ver SECURITY.md.'
-
-# --- NETLIFY ---
-Write-Host ""
-Write-Separador
-Write-Info "Netlify..."
-try {
-    $ns = (Invoke-ForjaTool netlify status 2>&1) | Out-String
-    if ($LASTEXITCODE -eq 0 -and $ns -match "Logged in|Email:") { Write-OK "Netlify: Conectado"; $conexiones["Netlify"] = "OK" } else { throw }
-} catch {
-    Write-Warn "Netlify: No conectado"
-    $conexiones["Netlify"] = "PENDIENTE"
-    if (Get-Command netlify -ErrorAction SilentlyContinue) {
-        Write-Host ""
-        Write-Host "  Publica sitios web con un comando: netlify deploy --prod" -ForegroundColor White
-        Write-Host ""
-        if (Ask-SN "Conectar Netlify ahora? (se abre el navegador)") {
-            Write-Host ""
-            Invoke-ForjaTool netlify login
-            try {
-                $nc = (Invoke-ForjaTool netlify status 2>&1) | Out-String
-                if ($LASTEXITCODE -eq 0 -and $nc -match "Logged in|Email:") { Write-OK "Netlify conectado!"; $conexiones["Netlify"] = "OK" }
-            } catch {}
-        }
-    }
-}
-
-# --- VERCEL ---
-Write-Host ""
-Write-Separador
-$conexiones["Vercel"]=Show-ForjaVercelConnection
-
-# --- SUPABASE ---
-Write-Host ""
-Write-Separador
-Write-Info "Supabase..."
-try {
-    $ss = (Invoke-ForjaTool supabase projects list 2>&1) | Out-String
-    if ($LASTEXITCODE -eq 0 -and $ss -match "Name|ID" -and $ss -notmatch "error|not logged") {
-        Write-OK "Supabase: Conectado"
-        $conexiones["Supabase"] = "OK"
-    } else { throw }
-} catch {
-    Write-Warn "Supabase: No conectado"
-    $conexiones["Supabase"] = "PENDIENTE"
-    if (Get-Command supabase -ErrorAction SilentlyContinue) {
-        Write-Host ""
-        Write-Host "  PostgreSQL, autenticacion y storage: supabase login" -ForegroundColor White
-        Write-Host ""
-        if (Ask-SN "Conectar Supabase ahora? (se abre el navegador)") {
-            Write-Host ""
-            Invoke-ForjaTool supabase login
-            try {
-                $sc = (Invoke-ForjaTool supabase projects list 2>&1) | Out-String
-                if ($LASTEXITCODE -eq 0 -and $sc -match "Name|ID") { Write-OK "Supabase conectado!"; $conexiones["Supabase"] = "OK" }
-            } catch {}
-        }
-    }
-}
-
-# --- SNYK ---
-Write-Host ""
-Write-Separador
-Write-Info "Snyk..."
-$conexiones['Snyk'] = 'PENDIENTE'
-if (Get-Command snyk -ErrorAction SilentlyContinue) {
-    if (Test-SnykAuth) { Write-OK 'Snyk: conectado'; $conexiones['Snyk'] = 'OK' }
-    elseif (Ask-SN 'Conectar Snyk por navegador (OAuth)?') {
-        Invoke-ForjaTool snyk auth
-        if ($LASTEXITCODE -eq 0 -and (Test-SnykAuth)) {
-            Write-OK 'Snyk conectado!'; $conexiones['Snyk'] = 'OK'
-        } else { Write-Warn 'No se pudo verificar Snyk. Revisa snyk auth en una terminal nueva.' }
-    }
-} else { Write-Warn 'Snyk no disponible.' }
-
-# --- DOCKER ---
-Write-Host ""
-Write-Separador
-Write-Info "Docker..."
-try {
-    $ds = (docker info 2>&1) | Out-String
-    if ($LASTEXITCODE -eq 0 -and $ds -match "Server Version") { Write-OK "Docker: Funcionando"; $conexiones["Docker"] = "OK" } else { throw }
-} catch {
-    Write-Warn "Docker: No esta corriendo"
-    $conexiones["Docker"] = "PENDIENTE"
-    Write-Host ""
-    Write-Host "  Abri Docker Desktop y espera a que diga 'Docker is running'." -ForegroundColor White
-    Write-Host "  Si recien lo instalaste, primero reinicia la PC." -ForegroundColor White
-}
-
-# ============================================================
-#  ESTADO FINAL DE CONEXIONES
-# ============================================================
-Write-Host ""
-Write-Host ""
-Write-Section "============================================================"
-Write-Section "  ESTADO FINAL DE CONEXIONES"
-Write-Section "============================================================"
-Write-Host ""
-
-$pendientes = 0
-foreach ($key in @("GitHub CLI","Claude MCP","Netlify","Vercel","Supabase","Snyk","Docker")) {
-    $val = $conexiones[$key]
-    if ($val -eq "OK") {
-        Write-Host "  [OK] $key" -ForegroundColor Green
-    } elseif ($val -like 'OPCIONAL*') {
-        Write-Dim "$key - $val"
-    } else {
-        Write-Host "  [!!] $key - PENDIENTE" -ForegroundColor Red
-        $pendientes++
-    }
-}
-
-Write-Host ""
-Write-Section "============================================================"
-
-if ($pendientes -gt 0) {
-    Write-Host ""
-    Write-Warn "$pendientes servicio(s) pendiente(s) de vincular."
-    Write-Warn "Volve a correr este script para verificar las conexiones."
-    Write-Host ""
-} else {
-    Write-Host ""
-    Write-Host "  *** TODAS LAS CONEXIONES ESTAN ACTIVAS ***" -ForegroundColor Green
-    Write-Host "  Las conexiones verificadas estan disponibles. Revisa tambien el resumen de instalacion." -ForegroundColor Green
-    Write-Host ""
-}
+$connectionState=Show-ForjaConnections
 
 # ============================================================
 #  PRIMEROS PASOS
 # ============================================================
 Write-Host ""
 Write-Section "============================================================"
-Write-Section "  PRIMEROS PASOS CON CLAUDE CODE"
+Write-Section "  PRIMEROS PASOS CON TU AGENTE DE IA"
 Write-Section "============================================================"
 Write-Host ""
 Write-Host "  1. Abre una terminal nueva y ve a tu proyecto:" -ForegroundColor White

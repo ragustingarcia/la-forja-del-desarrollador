@@ -61,6 +61,7 @@ try {
     $result=Invoke-ForjaPackageProcess $shell @('-NoProfile','-EncodedCommand',$encoded) 'Fixture fallida'
     Assert ($result.ExitCode -eq 1603) 'barra conserva exit code real del proceso'
     Assert (($result.Output -join ' ') -match 'FIXTURE_OUT' -and ($result.Output -join ' ') -match 'FIXTURE_ERR') 'barra conserva stdout y stderr para diagnostico'
+    Assert ($result.Stdout -match 'FIXTURE_OUT' -and $result.Stdout -notmatch 'FIXTURE_ERR' -and $result.Stderr -match 'FIXTURE_ERR') 'JSON de stdout queda separado de avisos stderr'
     Assert (@($script:frames | Where-Object Failed).Count -gt 0) 'proceso fallido muestra estado interrumpido'
     $python=Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $values=@('C:\folder with spaces\','a"b','x&y','%PATH%','bang!','')
