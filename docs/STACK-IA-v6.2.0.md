@@ -109,6 +109,30 @@ No se revisan ni modifican automáticamente los proyectos al ejecutar el modo 2.
 Wrangler se elige de nuevo su proyecto desde el modo 1. El login de un servicio y el funcionamiento
 de un proyecto se verifican por separado de la instalación de su CLI.
 
+## Recuperar una autenticación Vercel interrumpida
+
+El setup instala/verifica las herramientas antes del asistente de conexiones. Si se interrumpe
+una autenticación en ese último paso, las instalaciones anteriores no se revierten.
+
+La consulta de Vercel usa `whoami --non-interactive --no-color`, stdin cerrado y CI solo en el
+proceso hijo. Tiene un límite de ejecución de 30 segundos. Un timeout termina exclusivamente
+el proceso creado para esa consulta; no busca ni cierra sesiones ajenas y no se aplica como
+límite general a los instaladores. La salida debe confirmar un usuario único antes de anunciar
+conexión; una versión, error o respuesta ambigua deja la sesión pendiente.
+
+El login se realiza aparte, con `vercel.cmd login` en una terminal nueva; después se comprueba
+con `vercel.cmd whoami --non-interactive`. El sufijo `.cmd` evita seleccionar el shim PowerShell
+en equipos con políticas restrictivas. Si se cierra el navegador, el usuario puede reabrirlo o
+cancelar y repetir ese login; Forja no queda capturando y ocultando sus instrucciones.
+
+No se leen ni muestran tokens desde archivos de autenticación, no se hace logout ni se crean
+recursos para comprobar la sesión. Un fallo de red tampoco se presenta como prueba de que el
+usuario no tenga cuenta o haya perdido sus credenciales.
+
+Fuentes: [Vercel whoami](https://vercel.com/docs/cli/whoami),
+[modo no interactivo](https://vercel.com/docs/cli/global-options#non-interactive)
+y [Vercel login](https://vercel.com/docs/cli/login).
+
 ## Python y bibliotecas
 
 El modo 2 comprueba todas las ramas WinGet contempladas, de 3.10 a 3.15, y actualiza cada una que
@@ -161,8 +185,8 @@ requieren actualizar el catálogo revisado de Forja; no se descargan automática
 
 ## Evidencia y límites
 
-Validación local en PowerShell 5.1 y 7: **305 casos por shell** (84 de seguridad, 18 flujos,
-5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack, 30 de progreso/selección individual y 45 de explicaciones), sin fallos.
+Validación local en PowerShell 5.1 y 7: **327 casos por shell** (84 de seguridad, 18 flujos,
+5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack, 30 de progreso/selección individual 45 de explicaciones y 22 de conexiones), sin fallos.
 
 Las pruebas aisladas cubren selección y resumen completos, versiones Python coexistentes, rechazo
 de instalación de una rama nueva, confirmación fallida, separación de Flask/OpenCV, paquetes npm

@@ -99,6 +99,10 @@ Los motivos y las acciones sugeridas se muestran en consola y se conservan en me
 resumen; no ejecutan esas sugerencias ni crean un registro persistente con credenciales. Los pasos
 conservan los controles y confirmaciones de instalación existentes.
 
+La consulta de sesión de Vercel es no interactiva y tiene un plazo acotado. Un timeout solo
+termina el proceso que Forja creó para esa consulta; no cierra procesos ajenos ni cambia el
+comportamiento de los instaladores. El login se completa manualmente en una terminal separada.
+
 ## Probar antes de distribuir
 
 En una copia del repositorio:
@@ -114,6 +118,7 @@ pwsh -NoProfile -File .\tests\msi-repair.tests.ps1
 pwsh -NoProfile -File .\tests\stack.tests.ps1
 pwsh -NoProfile -File .\tests\progress-individual.tests.ps1
 pwsh -NoProfile -File .\tests\outcomes.tests.ps1
+pwsh -NoProfile -File .\tests\connections.tests.ps1
 ```
 
 `RemoteSigned` en ese comando afecta solo al proceso de prueba; no modifica polÃ­ticas persistentes

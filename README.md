@@ -39,6 +39,8 @@ WinGet, PowerShell 7, WSL, Git, Node.js LTS/npm, pnpm, Python, librerías Python
 
 El asistente de conexión de la base conserva los pasos de GitHub, Netlify, Vercel, Supabase, Snyk y Docker. Los servicios nuevos muestran sus comandos oficiales de autenticación para ejecutarlos manualmente. La instalación no crea bases, envía emails, publica dominios ni hace deploys.
 
+Vercel se comprueba con `whoami --non-interactive`, entrada cerrada y un límite de 30 segundos. La comprobación no abre un login. Si no confirma la sesión, el asistente explica el motivo, sigue con los otros servicios y muestra `vercel.cmd login` para una terminal separada. Cerrar una pestaña de autenticación no requiere repetir las instalaciones.
+
 ## Elegir el stack ampliado
 
 | Grupo | Herramienta | Método |

@@ -17,6 +17,8 @@ if ($FlowCase) {
     $script:text=$script:text.Replace($wingetOperation.Extent.Text,'function Invoke-ForjaWingetOperation {param($ArgumentList,$Label) Invoke-FakeTool -Name winget -Arguments $ArgumentList}')
     $packageOperation=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPackageProcess'},$true)
     $script:text=$script:text.Replace($packageOperation.Extent.Text,'function Invoke-ForjaPackageProcess {param($Executable,$ArgumentList,$Label) $output=@(Invoke-FakeTool -Name ([IO.Path]::GetFileNameWithoutExtension($Executable)) -Arguments $ArgumentList);return [pscustomobject]@{ExitCode=$LASTEXITCODE;Output=$output}}')
+    $sessionProbe=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaVercelSession'},$true)
+    $script:text=$script:text.Replace($sessionProbe.Extent.Text,'function Get-ForjaVercelSession {param($TimeoutSeconds) $null=Invoke-FakeTool -Name vercel -Arguments @(''whoami'',''--non-interactive'');return [pscustomobject]@{State=''pending'';Reason=''FIXTURE_SESSION_CANCELLED'';User=$null}}')
     $libraries=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPythonLibraries' },$true)
     if (-not $libraries) { throw 'Falta frontera de librerias Python' }
     $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update,[string]$Profile) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
@@ -69,6 +71,8 @@ if ($FlowCase) {
     function global:Start-Process { throw 'PROHIBIDO iniciar procesos reales en estos flujos' }
     function global:Test-Path { param([string]$Path,[string]$LiteralPath,[string]$PathType)
         $candidate=$Path; if ($LiteralPath) { $candidate=$LiteralPath }
+        # La fixture simula un perfil ausente aunque el usuario lo haya creado en su PC.
+        if($candidate -like '*\Forja\Python\web-vision'){return $false}
         if ($FlowCase -eq 'cleanup-fail' -and ($candidate -like '*\npm\claude*' -or $candidate -like '*\.local\bin\claude.exe')) { return $true }
         Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
     }
@@ -130,6 +134,7 @@ try {
         if ($p.ExitCode -ne $expected -or $stderr) { throw "$case : exit=$($p.ExitCode) esperado=$expected`n$stderr`n$stdout" }
         $calls = @(Get-Content -LiteralPath $evidencePath)
         if ($case -eq 'project-guide' -and ($calls.Count -gt 0 -or $stdout -notmatch 'STACK POR PROYECTO')) { throw 'La guia de stack debe funcionar sin ejecutar herramientas' }
+        if($case -eq 'setup-ok' -and ($stdout -notmatch 'FIXTURE_SESSION_CANCELLED' -or $stdout -notmatch 'ESTADO FINAL DE CONEXIONES' -or @($calls | Where-Object {$_ -eq 'vercel login'}).Count -gt 0)){throw 'Un login Vercel pendiente bloquea el final o vuelve a abrir el login'}
         if ($case -eq 'stack-selected' -and ($stdout -notmatch 'Codex CLI' -or @($calls | Where-Object {$_ -like '*@openai/codex*'}).Count -eq 0)) { throw 'La seleccion de agentes no recorrio Codex CLI' }
         if ($case -eq 'stack-selected') {
             $summary=($stdout -split 'RESUMEN DE INSTALACION',2)[1]

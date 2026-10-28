@@ -143,8 +143,8 @@ function ConvertTo-ForjaNativeArgument {param([AllowEmptyString()][string]$Value
     if($Value -and $Value -notmatch '[\s"]'){return $Value}
     return ('"'+(($Value -replace '(\\*)"','$1$1\"') -replace '(\\+)$','$1$1')+'"')
 }
-function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$ArgumentList,[string]$Label='Instalando')
-    $process=$null;$frame=0
+function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$ArgumentList,[string]$Label='Instalando',[ValidateRange(0,3600)][int]$TimeoutSeconds=0,[switch]$NonInteractive)
+    $process=$null;$frame=0;$timedOut=$false;$timer=[Diagnostics.Stopwatch]::StartNew()
     try {
         # npm se ejecuta con Node directamente: no hay cmd /c ni interpolacion de rutas.
         if([IO.Path]::GetFileName($Executable) -ieq 'npm.cmd'){
@@ -159,9 +159,11 @@ function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$Argume
         $psi.FileName=$Executable;$psi.Arguments=(@($ArgumentList | ForEach-Object {ConvertTo-ForjaNativeArgument $_}) -join ' ')
         $psi.WorkingDirectory=[Environment]::SystemDirectory
         $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
+        if($NonInteractive){$psi.RedirectStandardInput=$true;$psi.EnvironmentVariables['CI']='true'}
         $process=New-Object Diagnostics.Process;$process.StartInfo=$psi
         Write-ForjaProgress -Label $Label -Frame 0
         $null=$process.Start()
+        if($NonInteractive){$process.StandardInput.Close()}
         $readers=@(
             [pscustomobject]@{Reader=$process.StandardOutput;Pending=$process.StandardOutput.ReadLineAsync();Closed=$false},
             [pscustomobject]@{Reader=$process.StandardError;Pending=$process.StandardError.ReadLineAsync();Closed=$false}
@@ -169,6 +171,12 @@ function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$Argume
         $captured=New-Object 'System.Collections.Generic.List[string]'
         $afterExit=$null;$phase=$Label
         do {
+            if($TimeoutSeconds -gt 0 -and $timer.Elapsed.TotalSeconds -ge $TimeoutSeconds -and -not $process.HasExited){
+                $timedOut=$true
+                # Solo el proceso creado por esta consulta. No se buscan ni cierran otras sesiones.
+                try {$process.Kill();$null=$process.WaitForExit(2000)}catch{}
+                break
+            }
             foreach($reader in $readers){
                 $batch=0
                 while(-not $reader.Closed -and $reader.Pending.IsCompleted -and $batch -lt 1000){
@@ -195,11 +203,11 @@ function Invoke-ForjaPackageProcess {param([string]$Executable,[string[]]$Argume
         }
         $text=($captured -join "`n") -replace '\x1b\[[0-?]*[ -/]*[@-~]',''
         $lines=@($text -split '[\r\n]+' | ForEach-Object {($_ -replace '[\x00-\x08\x0b\x0c\x0e-\x1f]','').TrimEnd()} | Where-Object {$_ -and $_.Trim() -notmatch '^[|/\\ -]+$'})
-        $code=$process.ExitCode
+        $code=-2;if(-not $timedOut){$code=$process.ExitCode}
         Write-ForjaProgress -Label $Label -Frame ($frame+1) -Completed:($code -eq 0) -Failed:($code -ne 0)
-        return [pscustomobject]@{ExitCode=$code;Output=$lines}
-    } catch {Write-ForjaProgress -Label $Label -Frame ($frame+1) -Failed;Write-Warn $_.Exception.Message;return [pscustomobject]@{ExitCode=-1;Output=@()}}
-    finally {if($process){$process.Dispose()}}
+        return [pscustomobject]@{ExitCode=$code;Output=$lines;TimedOut=$timedOut}
+    } catch {Write-ForjaProgress -Label $Label -Frame ($frame+1) -Failed;Write-Warn $_.Exception.Message;return [pscustomobject]@{ExitCode=-1;Output=@();TimedOut=$timedOut}}
+    finally {if($process){$process.Dispose()};$timer.Stop()}
 }
 function Invoke-ForjaWingetOperation {param([string[]]$ArgumentList,[string]$Label)
     $command=Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -261,6 +269,49 @@ function Invoke-ForjaTool { param([string]$Name)
     }
     $global:LASTEXITCODE = $code
 }
+function Get-ForjaVercelProbeCommand {
+    $path=Get-ForjaToolPath vercel
+    if(-not $path){return $null}
+    if([IO.Path]::GetExtension($path) -ieq '.exe'){return [pscustomobject]@{Executable=$path;Arguments=@()}}
+    if([IO.Path]::GetExtension($path) -ine '.cmd'){throw 'El formato de instalacion de Vercel requiere una comprobacion manual.'}
+    # Entrada conocida del paquete npm oficial; no ejecutar un shim mediante cmd /c.
+    $scriptPath=Join-Path (Split-Path $path -Parent) 'node_modules\vercel\dist\vc.js'
+    Assert-NoReparsePath $scriptPath
+    if(-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)){throw 'No se encontro la entrada npm de Vercel junto a su comando. Conserva su gestor y verifica la sesion manualmente.'}
+    $node=Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    return [pscustomobject]@{Executable=$node.Source;Arguments=@($scriptPath)}
+}
+function Get-ForjaVercelSession {param([ValidateRange(1,60)][int]$TimeoutSeconds=30)
+    try {
+        $command=Get-ForjaVercelProbeCommand
+        if(-not $command){return [pscustomobject]@{State='missing';Reason='No se detecto la CLI de Vercel en las rutas revisadas.';User=$null}}
+        $arguments=@($command.Arguments)+@('whoami','--non-interactive','--no-color')
+        $result=Invoke-ForjaPackageProcess $command.Executable $arguments 'Verificando Vercel' -TimeoutSeconds $TimeoutSeconds -NonInteractive
+        if($result.TimedOut){return [pscustomobject]@{State='timeout';Reason='La consulta de sesion supero el tiempo limite. No se pudo confirmar la conexion; la Forja continua.';User=$null}}
+        if($result.ExitCode -ne 0){return [pscustomobject]@{State='pending';Reason=('Vercel no confirmo una sesion activa (codigo '+$result.ExitCode+'). Puede faltar el login, haber expirado o fallar la consulta de red.');User=$null}}
+        $users=@($result.Output | ForEach-Object {$_.Trim()} | Where-Object {$_ -match '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' -and $_ -notmatch '^(Error|Warning|undefined|null)$'})
+        if($users.Count -ne 1){return [pscustomobject]@{State='pending';Reason='La CLI termino, pero su salida no permite confirmar un usuario unico. No se marca como conectado.';User=$null}}
+        return [pscustomobject]@{State='connected';Reason='Vercel confirmo la sesion mediante una consulta sin interaccion.';User=$users[0]}
+    } catch {return [pscustomobject]@{State='pending';Reason=$_.Exception.Message;User=$null}}
+}
+function Show-ForjaVercelConnection {
+    Write-Info 'Vercel: comprobacion sin abrir el navegador (maximo 30 segundos)...'
+    $session=Get-ForjaVercelSession
+    if($session.State -eq 'connected'){
+        Write-OK ('Vercel: conectado como '+$session.User)
+        return 'OK'
+    }
+    Write-Warn ('Vercel: pendiente. '+$session.Reason)
+    if($session.State -eq 'missing'){Write-Info 'Elegi T22 para instalar la CLI.'}
+    else {
+        Write-Info 'No hace falta repetir las instalaciones. En una terminal nueva ejecuta: vercel.cmd login'
+        Write-Info 'Completa el navegador. Si cerraste la pestana, reabrila o cancela ese login y repetilo.'
+        Write-Info 'Despues verifica: vercel.cmd whoami --non-interactive'
+    }
+    Write-Dim 'La Forja sigue con los otros servicios; el login se completa aparte.'
+    return 'PENDIENTE'
+}
+
 function Get-WingetPackageInfo { param([string]$Id)
     $info = [pscustomobject]@{ State='error'; Version=$null; Available=$null; ExitCode=-1; Detail='' }
     try {
@@ -2945,30 +2996,7 @@ try {
 # --- VERCEL ---
 Write-Host ""
 Write-Separador
-Write-Info "Vercel..."
-try {
-    $vs = (Invoke-ForjaTool vercel whoami 2>&1) | Out-String
-    if ($LASTEXITCODE -eq 0 -and $vs -match "\w" -and $vs -notmatch "Error|not logged|No user") {
-        Write-OK "Vercel: Conectado como $($vs.Trim())"
-        $conexiones["Vercel"] = "OK"
-    } else { throw }
-} catch {
-    Write-Warn "Vercel: No conectado"
-    $conexiones["Vercel"] = "PENDIENTE"
-    if (Get-Command vercel -ErrorAction SilentlyContinue) {
-        Write-Host ""
-        Write-Host "  Publica apps Next.js y React: vercel --prod" -ForegroundColor White
-        Write-Host ""
-        if (Ask-SN "Conectar Vercel ahora?") {
-            Write-Host ""
-            Invoke-ForjaTool vercel login
-            try {
-                $vc = (Invoke-ForjaTool vercel whoami 2>&1) | Out-String
-                if ($LASTEXITCODE -eq 0 -and $vc -match "\w" -and $vc -notmatch "Error") { Write-OK "Vercel conectado!"; $conexiones["Vercel"] = "OK" }
-            } catch {}
-        }
-    }
-}
+$conexiones["Vercel"]=Show-ForjaVercelConnection
 
 # --- SUPABASE ---
 Write-Host ""
