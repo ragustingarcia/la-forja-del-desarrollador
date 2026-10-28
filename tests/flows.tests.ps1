@@ -145,6 +145,7 @@ try {
             $summary=($stdout -split 'RESUMEN DE ACTUALIZACION',2)[1]
             if($summary -notmatch 'MOTIVOS Y SIGUIENTES PASOS' -or $summary -notmatch 'Motivo:' -or $summary -notmatch 'Siguiente paso:'){throw 'Resumen de actualizacion pierde causas y acciones'}
         }
+        if($case -eq 'python-conflict' -and ($summary -notmatch '\[AVISO\] Python compartido' -or $summary -notmatch 'Ese entorno no se modifico')){throw 'El aviso del Python compartido se cuenta pero no queda explicado en el resumen'}
         if($case -eq 'single-cancel' -and ($stdout -notmatch 'NO ELEGIDO' -or $stdout -notmatch 'No confirmaste')){throw 'La cancelacion individual no explica por que no actuo'}
         if($case -eq 'catalog' -and ($stdout -notmatch 'CATALOGO COMPLETO' -or $stdout -notmatch 'Cloudflare Wrangler' -or $stdout -notmatch 'Miniforge3')){throw 'Catalogo incompleto o paginacion interrumpida'}
         if($case -in @('catalog','catalog-return') -and @([regex]::Matches($stdout,'FORJA DEL DESARROLLADOR')).Count -ne 2){throw 'El catalogo no regresa al menu principal'}

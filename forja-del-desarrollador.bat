@@ -2149,7 +2149,15 @@ if ($modoSel -eq "2") {
     Write-Info 'Librerias Python...'
     Invoke-ForjaUpdateStep {
         $pythonResult=Invoke-ForjaPythonLibraries -Update
-        if($pythonResult.SharedConflict){Add-UpdResultado 'aviso'}
+        if($pythonResult.SharedConflict){
+            Add-UpdResultado 'aviso'
+            $libraryDetail=$script:ForjaStepDetail
+            $null=Set-ForjaOutcome 'aviso' 'El Python compartido tiene dependencias incompatibles o no pudo verificarse con pip check. Ese entorno no se modifico.' 'Revisa el entorno de la aplicacion afectada por separado; conservarlo no significa haber reparado sus dependencias.'
+            $sharedTool=[pscustomobject]@{Id='python-shared';Name='Python compartido (fuera del venv de Forja)';Code=''}
+            $sharedResult=New-ForjaStepResult $sharedTool 'aviso' -Update
+            $script:ForjaResults+=@($sharedResult);Write-ForjaStepResult $sharedResult
+            $script:ForjaStepDetail=$libraryDetail
+        }
         return $pythonResult.State
     } -Id 'python-base'
 
