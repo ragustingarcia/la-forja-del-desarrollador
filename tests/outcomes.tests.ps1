@@ -80,4 +80,7 @@ try {
     Assert (@($results | Where-Object {$_.Kind -ne 'declined' -or $_.State -ne 'saltado'}).Count -eq 0) 'setup distingue herramientas no elegidas de instalaciones ausentes'
     Assert ($script:providerCalls -eq 4) 'explicar cancelaciones no ejecuta instaladores ni consultas nuevas al proveedor'
     Write-Host "RESULTADO EXPLICACIONES: $passed PASS / 0 FAIL"
+    # El mock deja un fallo WinGet esperado. Solo tras pasar todas las aserciones,
+    # cerrar la bateria con exito para el wrapper de GitHub Actions.
+    $global:LASTEXITCODE=0
 } finally {$env:LOCALAPPDATA=$savedLocal}
