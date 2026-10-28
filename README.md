@@ -25,6 +25,10 @@ Descargá `forja-del-desarrollador.bat` y abrilo con doble clic, **sin ejecutar 
 
 El menú es espaciado y está agrupado por categorías. Cada entrada explica para qué sirve en términos simples. Escribí su código (por ejemplo, `T05` para Node.js) para actuar sobre esa herramienta, sin recorrer el setup completo. La selección muestra su explicación y pide confirmación antes de instalar o actualizar.
 
+Los resultados incluyen **motivo y siguiente paso**, con el código de la herramienta cuando corresponde. El resumen de actualización repite los casos que requieren atención. Se distingue entre no detectado, gestionado por Store, gestor externo, proyecto requerido, selección no elegida y actualización manual. “No detectado” se refiere a las rutas y gestores revisados; “gestor externo” no afirma que exista una actualización disponible.
+
+Por ejemplo: `Neon CLI (T24) → NO DETECTADO → no figura como paquete npm global → elegir T24 para instalar`. La app Store, los JDK de Scoop y los entornos por proyecto explican sus propios pasos sin agregar copias ni cambiar de gestor.
+
 Las descargas directas muestran una barra con porcentaje y MB recibidos. WinGet, npm, pip y Git muestran una barra de actividad cuando no informan un total medible; los avisos del proveedor se conservan. Si WinGet no permite actualizar Android Studio o Miniforge, quedan pendientes con indicaciones del gestor original.
 
 No incluye controladores ni aplicaciones de uso diario. Cada agente conserva su propia configuración, skills y MCP.

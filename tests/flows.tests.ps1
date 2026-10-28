@@ -133,7 +133,7 @@ try {
         if ($case -eq 'stack-selected' -and ($stdout -notmatch 'Codex CLI' -or @($calls | Where-Object {$_ -like '*@openai/codex*'}).Count -eq 0)) { throw 'La seleccion de agentes no recorrio Codex CLI' }
         if ($case -eq 'stack-selected') {
             $summary=($stdout -split 'RESUMEN DE INSTALACION',2)[1]
-            if($summary -notmatch '\[OK\]\s+Codex CLI' -or $summary -notmatch '\[OK\]\s+Flask \+ OpenCV' -or $summary -notmatch '\[OK\]\s+Render CLI'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
+            if($summary -notmatch '\[PRESENTE / SIN CAMBIOS\]\s+Codex CLI' -or $summary -notmatch '\[PRESENTE / SIN CAMBIOS\]\s+Flask \+ OpenCV' -or $summary -notmatch '\[COMPLETADO\]\s+Render CLI'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
         }
         if($case -eq 'fresh-setup' -and $calls -notcontains 'archive supabase-native'){throw 'No se probo Supabase ausente con el instalador nativo simulado'}
         if ($case -in @('cancel','diagnostic','project-guide','catalog','catalog-return','single-cancel','single-guide','single-invalid','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
@@ -141,6 +141,11 @@ try {
             if($calls.Count -eq 0 -or @($calls | Where-Object {$_ -notlike '*OpenJS.NodeJS.LTS*'}).Count -gt 0 -or $stdout -match 'RESUMEN DE INSTALACION'){throw 'La seleccion individual ejecuto otras herramientas'}
         }
         if($case -eq 'single-invalid' -and $stdout -notmatch 'Ese codigo no existe'){throw 'Codigo individual desconocido no se rechazo'}
+        if($case -in @('update-current','update-fail','python-conflict')){
+            $summary=($stdout -split 'RESUMEN DE ACTUALIZACION',2)[1]
+            if($summary -notmatch 'MOTIVOS Y SIGUIENTES PASOS' -or $summary -notmatch 'Motivo:' -or $summary -notmatch 'Siguiente paso:'){throw 'Resumen de actualizacion pierde causas y acciones'}
+        }
+        if($case -eq 'single-cancel' -and ($stdout -notmatch 'NO ELEGIDO' -or $stdout -notmatch 'No confirmaste')){throw 'La cancelacion individual no explica por que no actuo'}
         if($case -eq 'catalog' -and ($stdout -notmatch 'CATALOGO COMPLETO' -or $stdout -notmatch 'Cloudflare Wrangler' -or $stdout -notmatch 'Miniforge3')){throw 'Catalogo incompleto o paginacion interrumpida'}
         if($case -in @('catalog','catalog-return') -and @([regex]::Matches($stdout,'FORJA DEL DESARROLLADOR')).Count -ne 2){throw 'El catalogo no regresa al menu principal'}
         if($case -eq 'invalid'){

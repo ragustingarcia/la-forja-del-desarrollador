@@ -32,3 +32,4 @@ jobs:
           ./tests/msi-repair.tests.ps1
           ./tests/stack.tests.ps1
           ./tests/progress-individual.tests.ps1
+          ./tests/outcomes.tests.ps1

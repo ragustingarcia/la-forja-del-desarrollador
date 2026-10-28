@@ -38,8 +38,8 @@ $AnthropicSkillsRevision = 'dbd4588f9e1033efb41dad4bef2f7947c8993d44'
 $Host.UI.RawUI.WindowTitle = "Forja del Desarrollador $VERSION"
 
 function Write-OK      { param($msg) Write-Host "  [OK] $msg" -ForegroundColor Green }
-function Write-Err     { param($msg) Write-Host "  [X]  $msg" -ForegroundColor Red }
-function Write-Warn    { param($msg) Write-Host "  [!]  $msg" -ForegroundColor Yellow }
+function Write-Err     { param($msg) $script:ForjaLastNotice=[string]$msg; Write-Host "  [X]  $msg" -ForegroundColor Red }
+function Write-Warn    { param($msg) $script:ForjaLastNotice=[string]$msg; Write-Host "  [!]  $msg" -ForegroundColor Yellow }
 function Write-Info    { param($msg) Write-Host "  $msg" -ForegroundColor Cyan }
 function Write-Section { param($msg) Write-Host $msg -ForegroundColor Yellow }
 function Write-Dim     { param($msg) Write-Host "  $msg" -ForegroundColor DarkGray }
@@ -686,13 +686,13 @@ function Invoke-ForjaPythonLibraries { param([switch]$Update,[switch]$CheckShare
 
 function Invoke-WingetUpdate { param($id, $nombre)
     $info = Get-WingetPackageInfo $id
-    if ($info.State -eq 'absent') { Write-Dim "$nombre no figura en el inventario de WinGet. Saltado."; return 'saltado' }
-    if ($info.State -ne 'installed') { Write-Warn "${nombre}: $($info.Detail)"; return 'error' }
-    if (-not $info.Available) { Write-OK "$nombre ya esta al dia (instalada: $($info.Version))."; return 'aldia' }
+    if ($info.State -eq 'absent') { Write-Dim "$nombre no figura en el inventario de WinGet. Saltado."; return (Set-ForjaOutcome 'saltado' 'No figura instalado en el inventario de WinGet. El modo 2 no agrega programas ausentes.' 'Elegi su codigo T en el menu si queres instalarlo.' 'absent') }
+    if ($info.State -ne 'installed') { Write-Warn "${nombre}: $($info.Detail)"; return (Set-ForjaOutcome 'error' ('No se pudo consultar WinGet: '+$info.Detail) 'Revisa la consulta de WinGet y reintenta; no se instalo nada.') }
+    if (-not $info.Available) { Write-OK "$nombre ya esta al dia (instalada: $($info.Version))."; return (Set-ForjaOutcome 'aldia' ('WinGet registra '+$info.Version+' y no informa una actualizacion aplicable.') 'No requiere otra accion en esta consulta.') }
     Write-Info "$nombre : instalada $($info.Version) -> disponible $($info.Available)"
     if ($id -eq 'MongoDB.Shell' -and (Test-MongoshBusy)) {
         Write-Warn 'mongosh esta abierto. Cerra sus sesiones y volve a actualizarlo; no se cierran procesos automaticamente.'
-        return 'pendiente'
+        return (Set-ForjaOutcome 'pendiente' 'mongosh tiene sesiones abiertas; se evito intervenir sobre ellas.' 'Cerra las sesiones de mongosh y reintenta T30.')
     }
     if ($id -eq 'MongoDB.Shell') {
         $previousFailure=Get-MongoshPreviousFailure $info.Available
@@ -723,7 +723,10 @@ function Invoke-WingetUpdate { param($id, $nombre)
         elseif($id -eq 'CondaForge.Miniforge3'){Write-Warn 'Miniforge requiere su gestor original. Revisa Conda en su terminal; no se migran tus entornos.'}
         else {Write-Warn 'Este programa requiere el actualizador de su proveedor.'}
         Write-Info 'Se deja pendiente; no se repite el instalador ni se cambia el gestor.'
-        return 'pendiente'
+        $next='Usa el actualizador del proveedor; no se cambia el gestor.'
+        if($id -eq 'Google.AndroidStudio'){$next='Abri Android Studio y busca actualizaciones desde Help o Settings > Updates. No hace falta reinstalarlo.'}
+        elseif($id -eq 'CondaForge.Miniforge3'){$next='Revisa Conda en Miniforge Prompt, previsualizando el plan antes de aplicar cambios. No migres entornos para actualizar el instalador.'}
+        return (Set-ForjaOutcome 'pendiente' ('WinGet detecto '+$info.Version+' -> '+$info.Available+', pero el proveedor no admite actualizar por WinGet (0x8A150114).') $next 'unsupported')
     }
     $detail=Get-InstallerFailureDetail ($installerOutput -join "`n")
     Write-Warn "${nombre}: fallo WinGet $codigo. $detail"
@@ -731,7 +734,7 @@ function Invoke-WingetUpdate { param($id, $nombre)
         if (Ask-SN 'Intentar reparacion con el MSI oficial verificado y UAC solo para este paquete?') { return (Invoke-MongoshRepair $info.Available) }
         return 'pendiente'
     }
-    return 'error'
+    return (Set-ForjaOutcome 'error' ('WinGet termino con codigo '+$codigo+'. '+$detail) 'Revisa el mensaje y log del instalador; reintenta solo despues de resolver la causa.')
 }
 
 # Actualiza un paquete npm global solo si la version instalada
@@ -771,6 +774,77 @@ function Invoke-NpmUpdate { param($pkg, $nombre)
     Write-Warn "${nombre}: error al actualizar."
     return "error"
 }
+function Set-ForjaOutcome {param([string]$State,[string]$Reason,[string]$Next,[string]$Kind='')
+    $script:ForjaStepDetail=[pscustomobject]@{State=$State;Reason=$Reason;Next=$Next;Kind=$Kind}
+    return $State
+}
+function Get-ForjaSelection {param([string]$Id,[string]$Name,[string]$Package)
+    $tool=Get-ForjaToolCatalog | Where-Object {($Id -and $_.Id -eq $Id) -or ($Package -and $_.Package -eq $Package) -or ($Name -and $_.Name -eq $Name)} | Select-Object -First 1
+    if($tool){return $tool}
+    return [pscustomobject]@{Id=$Id;Name=$Name;Code='';Method='';Package=$Package}
+}
+function New-ForjaStepResult {param($Tool,[string]$State,[switch]$Update)
+    $reason='';$next='';$kind=''
+    $retry='Revisa los mensajes de este paso y volve a intentarlo.'
+    $install='Elegi esta herramienta desde el menu para instalarla.'
+    if($Tool.Code){$retry='Revisa los mensajes de este paso y reintenta con '+$Tool.Code+'.';$install='Para instalarla, elegi '+$Tool.Code+' en el menu.'}
+    switch($State){
+        'ok' {$label='COMPLETADO';$reason='El paso termino y paso las comprobaciones previstas.';$next='No requiere otra accion en Forja.'}
+        'ok-aviso' {$label='COMPLETADO CON AVISOS';$reason='La herramienta paso las comprobaciones, pero el proveedor emitio avisos.';$next='Revisa los avisos del proveedor; Forja no cambia su politica de scripts.'}
+        'aldia' {$label='PRESENTE / SIN CAMBIOS';$reason='El paso encontro la seleccion presente y no aplico cambios. Esto no certifica versiones fuera del gestor consultado.';$next='No requiere otra instalacion. Consulta su gestor si necesitas verificar una version diferente.'}
+        'saltado' {$label='SIN CAMBIOS';$reason='El paso no ejecuto una instalacion ni una actualizacion.';$next=$install}
+        'pendiente' {$label='PENDIENTE';$reason='Hace falta una accion adicional para completar o verificar este paso.';$next=$retry}
+        'error' {$label='ERROR';$reason='El paso fallo o no pudo confirmar el resultado esperado; no se marca como completado.';$next=$retry}
+        'guia' {$label='GUIA';$reason='Esta seleccion muestra instrucciones; no ejecuta instalaciones ni modifica proyectos.';$next='Segui la guia en el proyecto y cuenta correspondientes.'}
+        'aviso' {$label='AVISO';$reason='Se detecto una situacion que requiere revision.';$next='Revisa el detalle del paso.'}
+        default {$label='SIN CONFIRMAR';$State='pendiente';$reason='No se obtuvo un resultado verificable para este paso.';$next=$retry}
+    }
+    if($script:ForjaStepDetail -and $script:ForjaStepDetail.State -eq $State){
+        $reason=$script:ForjaStepDetail.Reason;$next=$script:ForjaStepDetail.Next;$kind=$script:ForjaStepDetail.Kind
+        switch($kind){'absent'{$label='NO DETECTADO'};'delegated'{$label='GESTIONADO POR STORE'};'external'{$label='GESTOR EXTERNO'};'project'{$label='REQUIERE PROYECTO'};'declined'{$label='NO ELEGIDO'};'unsupported'{$label='ACTUALIZACION MANUAL'}}
+    }
+    if($State -in @('error','pendiente') -and $script:ForjaLastNotice -and -not $script:ForjaStepDetail){$reason+=' Ultimo aviso: '+$script:ForjaLastNotice}
+    if($kind -eq 'absent' -and $Tool.Code){$next=$next -replace 'su codigo T|el codigo T de esta herramienta|el codigo T',$Tool.Code}
+    if(-not $reason){$reason='No se pudo precisar la causa; revisa la salida del paso.'}
+    if(-not $next){$next=$retry}
+    return [pscustomobject]@{Id=$Tool.Id;Name=$Tool.Name;Code=$Tool.Code;State=$State;Label=$label;Reason=$reason;Next=$next;Kind=$kind}
+}
+function Write-ForjaStepResult {param($Result)
+    $width=(Get-ForjaConsoleSize).Width
+    $title='['+$Result.Label+'] '+$Result.Name
+    if($Result.Code){$title+=' ('+$Result.Code+')'}
+    foreach($line in @(Format-ForjaMenuLine $title $width '  ' '    ')){Write-Host $line -ForegroundColor Cyan}
+    foreach($line in @(Format-ForjaMenuLine ('Motivo: '+$Result.Reason) $width '    ' '    ')){Write-Host $line}
+    foreach($line in @(Format-ForjaMenuLine ('Siguiente paso: '+$Result.Next) $width '    ' '    ')){Write-Host $line -ForegroundColor DarkGray}
+}
+function Invoke-ForjaExplainedStep {param($Tool,[scriptblock]$Action,[switch]$Update)
+    # Cada paso empieza sin detalles anteriores: un aviso no se hereda de otra herramienta.
+    $script:ForjaStepDetail=$null;$script:ForjaLastNotice=$null
+    try {$state=& $Action}
+    catch {$state=Set-ForjaOutcome 'error' ('No se pudo completar el paso: '+$_.Exception.Message) 'Revisa el mensaje del proveedor y reintenta esta seleccion.'}
+    if($state -is [array] -or $state -notin @('ok','ok-aviso','aldia','saltado','pendiente','error','guia','aviso')){
+        $state=Set-ForjaOutcome 'error' 'El paso no devolvio un estado unico y verificable.' 'Revisa el detalle del paso antes de volver a intentarlo.'
+    }
+    $result=New-ForjaStepResult $Tool $state -Update:$Update
+    $script:ForjaResults+=@($result)
+    Write-ForjaStepResult $result
+    return $result
+}
+function Invoke-ForjaUpdateStep {param([scriptblock]$Action,[string]$Id,[string]$Name,[string]$Package)
+    $tool=Get-ForjaSelection -Id $Id -Name $Name -Package $Package
+    $result=Invoke-ForjaExplainedStep $tool $Action -Update
+    Add-UpdResultado $result.State
+}
+function Show-ForjaOutcomeSummary {
+    $attention=@($script:ForjaResults | Where-Object {$_.State -in @('saltado','pendiente','error','aviso','ok-aviso')})
+    Write-Host ''
+    Write-Section '  MOTIVOS Y SIGUIENTES PASOS'
+    if(-not $attention.Count){Write-Info 'No quedaron selecciones pendientes, salteadas ni con errores en este recorrido.';return}
+    foreach($result in $attention){Write-Host '';Write-ForjaStepResult $result}
+    Write-Host ''
+    foreach($line in @(Format-ForjaMenuLine 'No detectado se refiere al gestor y las rutas revisadas; no a todos los entornos de la PC.' (Get-ForjaConsoleSize).Width '  ' '  ')){Write-Host $line -ForegroundColor Cyan}
+}
+
 function Add-UpdResultado { param($r)
     switch ($r) {
         "ok"    { $script:updOK++ }
@@ -1164,15 +1238,15 @@ function Invoke-ForjaArchiveTool { param($Tool,[switch]$Update)
             if(-not (Test-ForjaManagedRuntime $Tool $root)){return 'error'}
             Write-OK "$($Tool.Name): version revisada $($Tool.Version)."
             Write-Dim ('Comando: '+(Join-Path $root $Tool.Launcher))
-            return 'aldia'
+            return (Set-ForjaOutcome 'aldia' ('Version revisada '+$Tool.Version+' confirmada con el comprobante y el runtime. No se consulto una version mas nueva del proveedor.') 'No requiere otra accion para esta revision del catalogo.')
         }
         $external=Get-ForjaStackCommand $Tool.Command
-        if($external){Write-Warn "$($Tool.Name) instalado por otro medio: $external. Revisar con el actualizador del proveedor.";return 'pendiente'}
+        if($external){Write-Warn "$($Tool.Name) instalado por otro medio: $external. Revisar con el actualizador del proveedor.";return (Set-ForjaOutcome 'pendiente' ('Se encontro el comando por otra instalacion: '+$external+'. No se agrego una segunda copia.') 'Usa el actualizador de esa instalacion; Forja no comprobo si esta al dia.' 'external')}
         $parent=Split-Path $root -Parent
-        if($Update -and -not (Test-Path -LiteralPath $parent)){return 'saltado'}
+        if($Update -and -not (Test-Path -LiteralPath $parent)){return (Set-ForjaOutcome 'saltado' 'No hay instalacion administrada por Forja ni comando externo detectado. El modo 2 no descarga herramientas nuevas.' 'Elegi su codigo T en el menu para instalar la version revisada.' 'absent')}
         if($Update){
             $old=@(Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Stop | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName '.forja-tool.json') -PathType Leaf })
-            if(-not $old.Count){return 'saltado'}
+            if(-not $old.Count){return (Set-ForjaOutcome 'saltado' 'No hay comprobante de una instalacion previa administrada por Forja.' 'Revisa esa carpeta y elegi el codigo T si queres preparar la herramienta.' 'absent')}
         }
         $workspace=New-ForjaWorkspace
         $archive=Join-Path $workspace 'tool.zip';$stage=Join-Path $workspace 'payload'
@@ -1196,14 +1270,14 @@ function Invoke-ForjaArchiveTool { param($Tool,[switch]$Update)
         Write-OK "$($Tool.Name) $($Tool.Version): instalado y verificado."
         Write-Info ('Ejecuta: '+(Join-Path $root $Tool.Launcher))
         return 'ok'
-    } catch {Write-Warn "$($Tool.Name): $($_.Exception.Message)";return 'error'}
+    } catch {Write-Warn "$($Tool.Name): $($_.Exception.Message)";return (Set-ForjaOutcome 'error' $_.Exception.Message 'Revisa el detalle de integridad, version o descarga antes de reintentar esta herramienta.')}
     finally {if($stream){$stream.Dispose()};if($workspace){try{Remove-ForjaWorkspace $workspace}catch{Write-Dim "Temporal retenido: $workspace"}}}
 }
 function Invoke-ForjaCatalogNpm { param($Tool,[switch]$Update)
-    if(-not (Get-ForjaToolPath npm)){Write-Warn 'npm no disponible.';return 'pendiente'}
+    if(-not (Get-ForjaToolPath npm)){Write-Warn 'npm no disponible.';return (Set-ForjaOutcome 'pendiente' 'npm no esta disponible para gestionar esta CLI.' 'Verifica Node.js/npm con T05 y reabri la Forja.')}
     if(Test-NpmPkg $Tool.Package){return (Invoke-NpmUpdate $Tool.Package $Tool.Name)}
-    if(Get-ForjaStackCommand $Tool.Command){Write-Warn "$($Tool.Name) usa otro instalador. No se agrega una segunda copia.";return 'pendiente'}
-    if($Update){return 'saltado'}
+    if(Get-ForjaStackCommand $Tool.Command){Write-Warn "$($Tool.Name) usa otro instalador. No se agrega una segunda copia.";return (Set-ForjaOutcome 'pendiente' 'El comando existe por otro instalador. No se agrego una segunda copia npm.' 'Usa el actualizador de esa instalacion; la presencia del comando no confirma que este al dia.' 'external')}
+    if($Update){return (Set-ForjaOutcome 'saltado' ('No se detecto '+$Tool.Package+' como paquete npm global ni su comando en las rutas revisadas. El modo 2 no instala selecciones nuevas.') 'Elegi el codigo T de esta herramienta para instalarla individualmente.' 'absent')}
     $version=((Invoke-ForjaTool npm view $Tool.Package version | Out-String).Trim())
     if($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$'){return 'error'}
     Invoke-ForjaTool npm install -g ($Tool.Package+'@'+$version) 2>&1 | ForEach-Object {Write-Host "  $_"}
@@ -1220,7 +1294,7 @@ function Test-ForjaWranglerPlatform {
 function Invoke-ForjaWranglerProject {
     if(-not (Test-ForjaWranglerPlatform)){Write-Warn 'Wrangler requiere Windows 11 o un entorno compatible del proveedor.';return 'pendiente'}
     $path=Read-Host '  Ruta absoluta del proyecto Cloudflare (ENTER = pendiente)'
-    if([string]::IsNullOrWhiteSpace($path)){return 'pendiente'}
+    if([string]::IsNullOrWhiteSpace($path)){return (Set-ForjaOutcome 'pendiente' 'No elegiste una carpeta de proyecto; no se modificaron dependencias.' 'Volve a T28 cuando tengas un proyecto con package.json.' 'project')}
     try {
         if(-not [IO.Path]::IsPathRooted($path)){throw 'La ruta debe ser absoluta.'}
         $path=[IO.Path]::GetFullPath($path)
@@ -1233,7 +1307,7 @@ function Invoke-ForjaWranglerProject {
             Assert-NoReparsePath (Join-Path $path $relative)
         }
         Write-Info "Proyecto: $path. npm modificara package.json, lockfile y node_modules."
-        if(-not (Ask-SN 'Instalar/actualizar Wrangler como dependencia de desarrollo aqui?')){return 'pendiente'}
+        if(-not (Ask-SN 'Instalar/actualizar Wrangler como dependencia de desarrollo aqui?')){return (Set-ForjaOutcome 'pendiente' 'No confirmaste modificar las dependencias del proyecto; no se ejecuto la instalacion.' 'Usa T28 y confirma solo si corresponde al proyecto elegido.' 'declined')}
         $version=(Invoke-ForjaTool npm view wrangler version | Out-String).Trim()
         if($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$'){return 'error'}
         Invoke-ForjaTool npm install --prefix $path --save-dev ("wrangler@"+$version) 2>&1 | ForEach-Object {Write-Host "  $_"}
@@ -1280,8 +1354,14 @@ function Invoke-ForjaStackTool { param($Tool,[switch]$Update)
                 $alternate=Get-ForjaAlternatePackage $Tool
                 if($alternate){
                     Write-Info ('Presente por otro gestor: '+$alternate)
-                    if($Update){Write-Warn 'Actualiza con su gestor original; no se agrega otra instalacion.';return 'pendiente'}
-                    return 'aldia'
+                    if($Update){
+                        Write-Warn 'Actualiza con su gestor original; no se agrega otra instalacion.'
+                        $next='Consulta y actualiza con su gestor original. No se comprobo si hay una version nueva.'
+                        if($Tool.Scoop){$next='Consulta scoop status; para actualizar esta seleccion usa scoop update '+$Tool.Scoop+'. No se agrega una copia WinGet.'}
+                        if($Tool.Id -eq 'rust'){$next='Consulta rustup show. Usa rustup update para toolchains y rustup self update para el gestor, cuando corresponda al proyecto.'}
+                        return (Set-ForjaOutcome 'pendiente' ('Ya esta presente por otro gestor: '+$alternate+'. WinGet no administra esa instalacion.') $next 'external')
+                    }
+                    return (Set-ForjaOutcome 'aldia' ('Presente por otro gestor: '+$alternate+'. No se consultaron actualizaciones en ese gestor.') 'Conserva su gestor original; no se agrego otra instalacion.' 'external')
                 }
             }
             if($Update){return (Invoke-WingetUpdate $Tool.Package $Tool.Name)}
@@ -1300,9 +1380,9 @@ function Invoke-ForjaStackTool { param($Tool,[switch]$Update)
             $before=Get-ForjaStoreApp $Tool
             if($before.State -eq 'error'){Write-Warn 'No se pudo consultar Microsoft Store.';return 'pendiente'}
             if($Update){
-                if($before.State -eq 'absent'){return 'saltado'}
+                if($before.State -eq 'absent'){return (Set-ForjaOutcome 'saltado' 'La app no figura instalada en Microsoft Store para este usuario. El modo 2 no agrega apps.' 'Elegi T15 si queres instalar la app.' 'absent')}
                 Write-Info "$($Tool.Name) $($before.Version). Actualizaciones gestionadas por Microsoft Store."
-                return 'saltado'
+                return (Set-ForjaOutcome 'saltado' ('La app esta instalada ('+$before.Version+'); sus actualizaciones se delegan a Microsoft Store. Forja no comprobo si existe otra version.') 'Abri Microsoft Store y consulta las actualizaciones de la app. No hace falta reinstalarla.' 'delegated')
             }
             if($before.State -eq 'installed'){Write-OK "$($Tool.Name) presente: $($before.Version).";return 'aldia'}
             # ID Store tomado de la documentacion oficial, separado del ID CLI OpenAI.Codex.
@@ -1313,12 +1393,12 @@ function Invoke-ForjaStackTool { param($Tool,[switch]$Update)
         }
         'python-venv' {
             $path=Join-Path $env:LOCALAPPDATA 'Forja\Python\web-vision'
-            if($Update -and -not (Test-Path -LiteralPath $path)){return 'saltado'}
+            if($Update -and -not (Test-Path -LiteralPath $path)){return (Set-ForjaOutcome 'saltado' 'No existe el venv web-vision de Forja. El modo 2 no crea este perfil nuevo; puede haber librerias en otros entornos.' 'Elegi T34 para crear Flask + OpenCV + NumPy en un entorno aislado.' 'absent')}
             $result=Invoke-ForjaPythonLibraries -Update:$Update -Profile 'web-vision'
             return $result.State
         }
         'project-npm' {
-            if($Update){Write-Dim 'Wrangler: dependencias por proyecto; para elegir uno usa modo 1 y selecciona Wrangler.';return 'saltado'}
+            if($Update){Write-Dim 'Wrangler: dependencias por proyecto; para elegir uno usa modo 1 y selecciona Wrangler.';return (Set-ForjaOutcome 'saltado' 'Wrangler se gestiona dentro de un proyecto; el modo 2 no busca ni modifica proyectos automaticamente.' 'Elegi T28 y selecciona la carpeta con su package.json para instalar o actualizar Wrangler alli.' 'project')}
             return (Invoke-ForjaWranglerProject)
         }
         default {Write-Warn 'Metodo de instalacion no reconocido.';return 'error'}
@@ -1326,17 +1406,15 @@ function Invoke-ForjaStackTool { param($Tool,[switch]$Update)
 }
 function Invoke-ForjaStackProfile { param([switch]$Update)
     $results=@()
-    foreach($tool in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core})){
-        Write-Info ("["+$tool.Group+"] "+$tool.Name)
-        if(-not $Update -and -not (Ask-SN ("Incluir "+$tool.Name+'?'))){$state='saltado'}
-        else {
-            try {$state=Invoke-ForjaStackTool $tool -Update:$Update}
-            catch {Write-Warn "$($tool.Name): fallo del paso ($($_.Exception.GetType().Name)).";$state='error'}
-        }
-        if($state -notin @('ok','ok-aviso','aldia','saltado','pendiente','error')){$state='error'}
-        $results+=[pscustomobject]@{Id=$tool.Id;Name=$tool.Name;State=$state}
-        if($Update){Add-UpdResultado $state}
-        Write-Host "  Resultado: $state"
+    foreach($entry in @(Get-ForjaStackCatalog | Where-Object {-not $_.Core})){
+        $tool=Get-ForjaSelection -Id $entry.Id
+        Write-Info ("["+$entry.Group+"] "+$entry.Name)
+        $result=Invoke-ForjaExplainedStep $tool {
+            if(-not $Update -and -not (Ask-SN ("Incluir "+$entry.Name+'?'))){return (Set-ForjaOutcome 'saltado' 'No elegiste esta herramienta en la preparacion del stack; no se intento instalarla.' ('Podes agregarla despues con '+$tool.Code+'.') 'declined')}
+            return (Invoke-ForjaStackTool $entry -Update:$Update)
+        } -Update:$Update
+        $results+=@($result)
+        if($Update){Add-UpdResultado $result.State}
     }
     return $results
 }
@@ -1348,7 +1426,7 @@ function Invoke-ForjaPythonUpdates { param([switch]$OfferNewBranch)
         if($info.State -eq 'installed'){$states+=Invoke-WingetUpdate $id ('Python '+$branch)}
         elseif($info.State -ne 'absent'){$states+='error';Write-Warn "No se pudo consultar Python $branch."}
     }
-    if(-not $states.Count){Write-Dim 'No hay ramas Python administradas por WinGet. No se modifican Conda ni venvs.';return 'saltado'}
+    if(-not $states.Count){Write-Dim 'No hay ramas Python administradas por WinGet. No se modifican Conda ni venvs.';return (Set-ForjaOutcome 'saltado' 'No se detectaron ramas Python administradas por WinGet. No se modificaron Conda ni venvs.' 'Usa T07 para preparar Python si lo necesitas.' 'absent')}
     if($OfferNewBranch){
         $target=Get-WingetPackageInfo 'Python.Python.3.14'
         if($target.State -eq 'absent'){
@@ -1362,7 +1440,12 @@ function Invoke-ForjaPythonUpdates { param([switch]$OfferNewBranch)
             }
         }
     }
-    foreach($state in @('error','pendiente','ok-aviso','ok','aldia','saltado')){if($states -contains $state){return $state}}
+    foreach($state in @('error','pendiente','ok-aviso','ok','aldia','saltado')){
+        if($states -contains $state){
+            $counts=@($states | Group-Object | ForEach-Object { $_.Name+': '+$_.Count }) -join '; '
+            return (Set-ForjaOutcome $state ('Resultado conjunto de las ramas Python revisadas: '+$counts+'. No se migraron los entornos existentes.') 'Consulta el detalle de cada rama mas arriba; usa T07 para volver a revisar Python.')
+        }
+    }
     return 'error'
 }
 function Invoke-ForjaSupabaseUpdate {
@@ -1849,6 +1932,7 @@ $necesitaReabrir = $false
 # ============================================================
 #  BIENVENIDA
 # ============================================================
+$script:ForjaResults=@()
 $individual=$null
 do {
     Clear-Host
@@ -1864,10 +1948,12 @@ do {
 if($individual){
     Write-Host '';Write-Section ('HERRAMIENTA INDIVIDUAL: '+$individual.Name)
     Write-Info $individual.Description
-    $state='saltado'
-    if($individual.Method -eq 'guidance'){$state=Invoke-ForjaIndividualTool $individual}
-    elseif(Ask-SN ('Instalar o actualizar solamente '+$individual.Name+'?')){$state=Invoke-ForjaIndividualTool $individual}
-    Write-Section ('Resultado: '+$state)
+    $result=Invoke-ForjaExplainedStep $individual {
+        if($individual.Method -eq 'guidance'){return (Invoke-ForjaIndividualTool $individual)}
+        if(Ask-SN ('Instalar o actualizar solamente '+$individual.Name+'?')){return (Invoke-ForjaIndividualTool $individual)}
+        return (Set-ForjaOutcome 'saltado' 'No confirmaste esta seleccion; no se intento instalar ni actualizar.' ('Podes volver a elegir '+$individual.Code+' cuando quieras.') 'declined')
+    }
+    $state=$result.State
     $null=Read-Host 'ENTER para cerrar'
     if($state -in @('error','pendiente')){exit 1};exit 0
 }
@@ -1917,7 +2003,7 @@ if ($modoSel -eq "2") {
     # mostrando su barra de progreso nativa en vivo
     # El lanzador usa Windows PowerShell 5.1, por lo que pwsh no queda bloqueado.
     Write-Info 'PowerShell 7...'
-    Add-UpdResultado (Invoke-WingetUpdate 'Microsoft.PowerShell' 'PowerShell 7')
+    Invoke-ForjaUpdateStep {Invoke-WingetUpdate 'Microsoft.PowerShell' 'PowerShell 7'} -Id 'powershell'
     Write-Host ''
 
     # --- Herramientas winget ---
@@ -1936,20 +2022,22 @@ if ($modoSel -eq "2") {
     foreach ($tool in $wingetTools) {
         $id = $tool[0]; $nombre = $tool[1]
         Write-Info "$nombre..."
-        Add-UpdResultado (Invoke-WingetUpdate $id $nombre)
+        Invoke-ForjaUpdateStep {Invoke-WingetUpdate $id $nombre} -Package $id -Name $nombre
         Write-Host ""
     }
 
     # Actualizar cada rama instalada, sin migrar ni borrar entornos.
     Write-Info 'Python (todas las ramas WinGet instaladas)...'
-    Add-UpdResultado (Invoke-ForjaPythonUpdates -OfferNewBranch)
+    Invoke-ForjaUpdateStep {Invoke-ForjaPythonUpdates -OfferNewBranch} -Id 'python'
     Write-Host ''
 
     Write-Info 'Supabase CLI...'
-    Add-UpdResultado (Invoke-ForjaSupabaseUpdate)
+    Invoke-ForjaUpdateStep {Invoke-ForjaSupabaseUpdate} -Id 'supabase'
     Write-Host ''
 
     # --- WSL ---
+    $script:ForjaStepDetail=$null;$script:ForjaLastNotice=$null
+    $wslState='saltado'
     Write-Info "WSL..."
     cmd /c "wsl --status >nul 2>&1"
     if ($LASTEXITCODE -eq 0) {
@@ -1969,20 +2057,27 @@ if ($modoSel -eq "2") {
         if ($codigo -eq 0) {
             # wsl --update devuelve 0 haya o no update: contarlo como "al dia"
             Write-OK "WSL al dia (se actualiza solo si hay version nueva)."
-            $script:updAlDia++
+            $script:updAlDia++;$wslState='aldia'
+            $null=Set-ForjaOutcome 'aldia' 'WSL termino su comprobacion con codigo 0; ese codigo no distingue entre actualizado y sin cambios.' 'No requiere otra accion en esta consulta.'
         } else {
             Write-Warn "WSL: la actualizacion fallo por ambas vias. Reintenta mas tarde"
             Write-Warn "o corre manualmente: wsl --update --web-download"
-            $script:updError++
+            $script:updError++;$wslState='error'
         }
     } else {
+        $null=Set-ForjaOutcome 'saltado' 'WSL no respondio correctamente a --status; no se confirmo una instalacion operativa.' 'Consulta wsl --status; si falta instalarlo, usa T03.'
         Write-Dim "WSL no esta instalado. Saltado."
         $script:updSaltado++
     }
     Write-Host ""
 
+    $wslResult=New-ForjaStepResult (Get-ForjaSelection -Id 'wsl') $wslState -Update
+    $script:ForjaResults+=@($wslResult);Write-ForjaStepResult $wslResult
+
     # --- Claude Code CLI (updater propio: cubre instalacion nativa y npm) ---
     Write-Info "Claude Code CLI..."
+    $script:ForjaStepDetail=$null;$script:ForjaLastNotice=$null
+    $claudeState='saltado'
 
     # Deteccion de doble instalacion (npm global + nativa). Tener las dos
     # confunde al PATH y al updater; Anthropic recomienda la nativa.
@@ -2000,7 +2095,13 @@ if ($modoSel -eq "2") {
             Write-Host ""
             Write-Info "Eliminando instalacion npm de Claude Code..."
             $cleanResult = Remove-ForjaClaudeNpm
-            if ($cleanResult -eq 'error') { $script:updError++ }
+            if ($cleanResult -eq 'error') {
+                $script:updError++
+                $null=Set-ForjaOutcome 'error' 'No se pudo completar la limpieza de la copia npm de Claude; no se afirma que se haya eliminado.' 'Revisa el detalle de limpieza y las sesiones abiertas antes de repetirla.'
+                $cleanupRecord=New-ForjaStepResult ([pscustomobject]@{Id='claude-cleanup';Name='Limpieza de Claude npm';Code='T16'}) 'error' -Update
+                $script:ForjaResults+=@($cleanupRecord);Write-ForjaStepResult $cleanupRecord
+                $script:ForjaStepDetail=$null
+            }
             Write-Host ""
         } else {
             Write-Dim "Se mantienen las dos instalaciones."
@@ -2021,44 +2122,36 @@ if ($modoSel -eq "2") {
             if ($LASTEXITCODE -eq 0 -and $versionClaude -match '\d+\.\d+\.\d+') {
                 $claudeAfter=$Matches[0]
                 Write-OK "Claude Code CLI: version $($versionClaude.Trim())."
-                if ($claudeBefore -eq $claudeAfter) { $script:updAlDia++ } else { $script:updOK++ }
+                if ($claudeBefore -eq $claudeAfter) { $script:updAlDia++;$claudeState='aldia' } else { $script:updOK++;$claudeState='ok' }
+                $null=Set-ForjaOutcome $claudeState ('El updater de Claude termino y se confirmo la version '+$claudeAfter+'.') 'No requiere otra accion en este paso.'
             }
-            else { Write-Warn 'Claude Code CLI: el updater termino, pero no se pudo verificar la version.'; $script:updError++ }
-        } else { Write-Warn "Claude Code CLI: proba 'claude update' en una terminal nueva."; $script:updError++ }
+            else { Write-Warn 'Claude Code CLI: el updater termino, pero no se pudo verificar la version.'; $script:updError++;$claudeState='error' }
+        } else { Write-Warn "Claude Code CLI: proba 'claude update' en una terminal nueva."; $script:updError++;$claudeState='error' }
     } else {
+        $null=Set-ForjaOutcome 'saltado' 'No se detecto Claude Code CLI en las rutas revisadas. El modo 2 no instala selecciones nuevas.' 'Elegi T16 para prepararlo.' 'absent'
         Write-Dim "Claude Code CLI no esta instalado. Saltado."
         $script:updSaltado++
     }
     Write-Host ""
 
+    $claudeResult=New-ForjaStepResult (Get-ForjaSelection -Id 'claude-code') $claudeState -Update
+    $script:ForjaResults+=@($claudeResult);Write-ForjaStepResult $claudeResult
+
     # --- Paquetes npm globales ---
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
-        $npmTools = @(
-            @("netlify-cli", "Netlify CLI"),
-            @("vercel",      "Vercel CLI"),
-            @("snyk",        "Snyk CLI")
-        )
-        foreach ($tool in $npmTools) {
-            $pkg = $tool[0]; $nombre = $tool[1]
-            Write-Info "$nombre..."
-            if (Test-NpmPkg $pkg) {
-                Add-UpdResultado (Invoke-NpmUpdate $pkg $nombre)
-            } else {
-                Write-Dim "$nombre no esta instalado. Saltado."
-                $script:updSaltado++
-            }
-            Write-Host ""
-        }
-    } else {
-        Write-Warn "npm no disponible: se saltean los paquetes npm."
-        Write-Host ""
+    foreach($baseId in @('netlify','vercel','snyk')){
+        $npmEntry=Get-ForjaSelection -Id $baseId
+        Write-Info ($npmEntry.Name+'...')
+        Invoke-ForjaUpdateStep {Invoke-ForjaCatalogNpm $npmEntry -Update} -Id $baseId
+        Write-Host ''
     }
 
     # --- Librerias Python: nunca modificar el interprete compartido ---
     Write-Info 'Librerias Python...'
-    $pythonResult=Invoke-ForjaPythonLibraries -Update
-    Add-UpdResultado $pythonResult.State
-    if ($pythonResult.SharedConflict) { Add-UpdResultado 'aviso' }
+    Invoke-ForjaUpdateStep {
+        $pythonResult=Invoke-ForjaPythonLibraries -Update
+        if($pythonResult.SharedConflict){Add-UpdResultado 'aviso'}
+        return $pythonResult.State
+    } -Id 'python-base'
 
     Write-Section 'AGENTES, CLI Y SERVICIOS DEL STACK'
     $null=Invoke-ForjaStackProfile -Update
@@ -2075,6 +2168,8 @@ if ($modoSel -eq "2") {
     Write-Host "  Pendientes:      $script:updPendiente" -ForegroundColor Yellow
     Write-Host "  Con avisos:      $script:updAvisos" -ForegroundColor Yellow
     Write-Host "  Con errores:     $script:updError" -ForegroundColor Yellow
+
+    Show-ForjaOutcomeSummary
 
     if ($script:updError -gt 0) {
         Write-Host ""
@@ -2719,17 +2814,32 @@ $items = @(
     @("skills",    "Skills de Claude Code")
 )
 
+$baseIds=@{pwsh='powershell';pylibs='python-base';claude='claude-code';claudeApp='claude-app';ghcli='github'}
 $items+=@($stackResults | ForEach-Object { ,@(('stack-'+$_.Id),$_.Name) })
 foreach ($item in $items) {
     $val = $status[$item[0]]
     if (-not $val) { $val = "SALTADO" }
+    if($item[0] -like 'stack-*'){
+        $record=$stackResults | Where-Object Id -eq $item[0].Substring(6) | Select-Object -First 1
+        Write-ForjaStepResult $record
+        continue
+    }
     if ($val -match "^OK") {
         Write-Host "  [OK] $($item[1])" -ForegroundColor Green
         if ($val -ne "OK") { Write-Dim "       $val" }
     } elseif ($val -match "ERROR") {
         Write-Host "  [X]  $($item[1])" -ForegroundColor Red
+        Write-Dim "Motivo: el paso fallo o no confirmo su resultado. Revisa el mensaje del instalador mas arriba."
     } else {
         Write-Host "  [!!] $($item[1]) : $val" -ForegroundColor Yellow
+        $baseId=$item[0];if($baseIds.ContainsKey($baseId)){$baseId=$baseIds[$baseId]}
+        $baseTool=Get-ForjaSelection -Id $baseId -Name $item[1]
+        $cause='El paso no completo una instalacion verificada; consulta su detalle mas arriba.'
+        if($val -match 'SALTADO'){$cause='No se completo esta seleccion en el setup; no se afirma que este instalada ni al dia.'}
+        if($val -match 'REINICIAR'){$cause='La instalacion requiere reiniciar y verificar su estado despues.'}
+        if($val -match 'MANUAL'){$cause='Este paso requiere completarse desde la aplicacion o el gestor indicado.'}
+        Write-Dim ('Motivo: '+$cause)
+        Write-Dim ('Siguiente paso: revisa el detalle de esta seleccion y volve a '+$baseTool.Code+'.')
     }
 }
 

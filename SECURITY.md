@@ -95,6 +95,10 @@ externos muestran actividad cuando no hay total medible. Sus procesos usan ejecu
 argumentos nativos y el directorio del sistema. npm se lanza mediante Node y npm-cli.js, sin shell
 de comandos intermedio ni cambios de allowScripts. Se conserva la salida y el código del proveedor.
 
+Los motivos y las acciones sugeridas se muestran en consola y se conservan en memoria para el
+resumen; no ejecutan esas sugerencias ni crean un registro persistente con credenciales. Los pasos
+conservan los controles y confirmaciones de instalación existentes.
+
 ## Probar antes de distribuir
 
 En una copia del repositorio:
@@ -109,6 +113,7 @@ pwsh -NoProfile -File .\tests\python-environment.tests.ps1
 pwsh -NoProfile -File .\tests\msi-repair.tests.ps1
 pwsh -NoProfile -File .\tests\stack.tests.ps1
 pwsh -NoProfile -File .\tests\progress-individual.tests.ps1
+pwsh -NoProfile -File .\tests\outcomes.tests.ps1
 ```
 
 `RemoteSigned` en ese comando afecta solo al proceso de prueba; no modifica polÃ­ticas persistentes

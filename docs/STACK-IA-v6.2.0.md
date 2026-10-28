@@ -23,6 +23,32 @@ Las instalaciones WinGet nuevas comprueban su presencia antes y después del ins
 npm comprueban el paquete registrado y el ejecutable; no basta con un exit code 0 del instalador.
 Un fallo de una herramienta no interrumpe el recorrido de las demás ni borra su estado del resumen.
 
+## Resultados que explican lo ocurrido
+
+Cada selección del catálogo y cada paso de actualización conservan nombre, código, estado, motivo
+y siguiente acción. La selección individual muestra los mismos datos. El resumen de actualización
+repite los salteados, pendientes, errores y avisos con su contexto, además de conservar los contadores.
+La preparación del stack distingue una opción no elegida de una herramienta no detectada; su resumen
+conserva las explicaciones del catálogo y el contexto de las comprobaciones de la base.
+
+| Presentación | Qué significa |
+|---|---|
+| NO DETECTADO | No aparece en el gestor/rutas revisados; se ofrece el código T para instalarla. |
+| GESTIONADO POR STORE | La app está instalada; se delega la consulta/actualización a Store. No se afirma que sea la última versión. |
+| GESTOR EXTERNO | Se conserva la instalación de Scoop/rustup u otro instalador detectado. Se explica cómo continuar sin duplicarla. |
+| REQUIERE PROYECTO | Hay que seleccionar explícitamente el proyecto; no se modifican dependencias en modo 2. |
+| NO ELEGIDO | Se canceló o no se seleccionó la herramienta; no se intentó instalar. |
+| ACTUALIZACIÓN MANUAL | El proveedor rechazó la actualización por WinGet; se conservan el código, las versiones y el paso manual. |
+
+El resultado estructurado es interno: no agrega comandos de instalación ni convierte las sugerencias
+en acciones automáticas. Cada paso limpia su contexto anterior para evitar atribuir a una herramienta
+el motivo o aviso de otra. Si una excepción o una respuesta ambigua impide verificar el éxito, se
+informa error; las causas que el proveedor no permite precisar no se inventan.
+
+Los ZIP fijados al catálogo se describen como una revisión verificada; no se presentan como una
+consulta de la versión más nueva. Para WSL se aclara que su código 0 no distingue una actualización
+de una comprobación sin cambios. Python conserva un resultado conjunto de sus ramas sin migrar entornos.
+
 ## Descargas y actualizaciones pendientes
 
 Las descargas HTTPS directas muestran bytes recibidos, MB totales y porcentaje cuando el servidor
@@ -135,8 +161,8 @@ requieren actualizar el catálogo revisado de Forja; no se descargan automática
 
 ## Evidencia y límites
 
-Validación local en PowerShell 5.1 y 7: **260 casos por shell** (84 de seguridad, 18 flujos,
-5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack y 30 de progreso/selección individual), sin fallos.
+Validación local en PowerShell 5.1 y 7: **305 casos por shell** (84 de seguridad, 18 flujos,
+5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack, 30 de progreso/selección individual y 45 de explicaciones), sin fallos.
 
 Las pruebas aisladas cubren selección y resumen completos, versiones Python coexistentes, rechazo
 de instalación de una rama nueva, confirmación fallida, separación de Flask/OpenCV, paquetes npm
