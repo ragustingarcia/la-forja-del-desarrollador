@@ -13,15 +13,39 @@ if ($FlowCase) {
     $runner=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaTool' },$true)
     if ($parseErrors.Count -gt 0 -or -not $runner) { throw 'No se pudo aislar la ejecucion de CLIs en la fixture' }
     $script:text=$script:text.Replace($runner.Extent.Text, 'function Invoke-ForjaTool { param([string]$Name) Invoke-FakeTool -Name $Name -Arguments $args }')
+    $wingetOperation=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaWingetOperation'},$true)
+    $script:text=$script:text.Replace($wingetOperation.Extent.Text,'function Invoke-ForjaWingetOperation {param($ArgumentList,$Label) Invoke-FakeTool -Name winget -Arguments $ArgumentList}')
+    $packageOperation=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPackageProcess'},$true)
+    $script:text=$script:text.Replace($packageOperation.Extent.Text,'function Invoke-ForjaPackageProcess {param($Executable,$ArgumentList,$Label) $output=@(Invoke-FakeTool -Name ([IO.Path]::GetFileNameWithoutExtension($Executable)) -Arguments $ArgumentList);return [pscustomobject]@{ExitCode=$LASTEXITCODE;Output=$output}}')
+    $sessionProbe=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaVercelSession'},$true)
+    $script:text=$script:text.Replace($sessionProbe.Extent.Text,'function Get-ForjaVercelSession {param($TimeoutSeconds) $null=Invoke-FakeTool -Name vercel -Arguments @(''whoami'',''--non-interactive'');return [pscustomobject]@{State=''pending'';Reason=''FIXTURE_SESSION_CANCELLED'';User=$null}}')
+    $serviceProbe=$tree.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaServiceSession'},$true)
+    $script:text=$script:text.Replace($serviceProbe.Extent.Text,'function Get-ForjaServiceSession {param($Name) $script:calls.Add((''connection-check ''+$Name));return [pscustomobject]@{State=''pending'';Reason=''FIXTURE_OFFLINE''}}')
     $libraries=$tree.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaPythonLibraries' },$true)
     if (-not $libraries) { throw 'Falta frontera de librerias Python' }
-    $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
+    $script:text=$script:text.Replace($libraries.Extent.Text, 'function Invoke-ForjaPythonLibraries { param([switch]$Update,[string]$Profile) if ($FlowCase -in @(''setup-fail'',''update-fail'')) { return [pscustomobject]@{ State=''error''; SharedConflict=$false } }; return [pscustomobject]@{ State=''aldia''; SharedConflict=($FlowCase -eq ''python-conflict'') } }')
+    $store=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaStoreApp'},$true)
+    $script:text=$script:text.Replace($store.Extent.Text, 'function Get-ForjaStoreApp {param($Tool) return [pscustomobject]@{State=''absent'';Version=$null}}')
+    $native=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaStackCommand'},$true)
+    $script:text=$script:text.Replace($native.Extent.Text, 'function Get-ForjaStackCommand {param($Name) return $null}')
+    $archive=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ForjaArchiveTool'},$true)
+    $script:text=$script:text.Replace($archive.Extent.Text, 'function Invoke-ForjaArchiveTool {param($Tool,[switch]$Update) $script:calls.Add((''archive ''+$Tool.Id)); if($Update){return ''saltado''};if($FlowCase -eq ''setup-fail''){return ''error''};return ''ok''}')
+    foreach($boundary in @('Invoke-ForjaCommand','Save-ForjaToolArchive')){
+        $definition=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $boundary},$true)
+        $script:text=$script:text.Replace($definition.Extent.Text, ('function '+$boundary+' { throw ''PROHIBIDO ejecutar binarios o descargar en estos flujos'' }'))
+    }
+    # La disponibilidad de CLI pertenece al escenario, no al software de la PC anfitriona.
+    # La resolucion real (.exe/.cmd/PATH/nativa) se prueba en native-tools y review.
+    $resolver=$tree.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ForjaToolPath'},$true)
+    $script:text=$script:text.Replace($resolver.Extent.Text, 'function Get-ForjaToolPath {param($Name) if($FlowCase -eq ''fresh-setup'' -and $Name -eq ''supabase''){return $null};return ''C:\fixture\tool.cmd''}')
     function global:Clear-Host {}
     function global:Read-Host { param($Prompt)
         $script:answers++
         if ($script:answers -eq 1) {
             switch ($FlowCase) {
                 'setup-ok' { return '1' }
+                'fresh-setup' { return '1' }
+                'stack-selected' { return '1' }
                 'setup-fail' { return '1' }
                 'update-fail' { return '2' }
                 'update-current' { return '2' }
@@ -29,16 +53,29 @@ if ($FlowCase) {
                 'python-conflict' { return '2' }
                 'cancel' { return '1' }
                 'diagnostic' { return '3' }
+                'project-guide' { return '4' }
+                'catalog' { return '5' }
+                'catalog-return' { return '5' }
+                'single-node' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'node').Code }
+                'single-cancel' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'node').Code }
+                'single-guide' { return (Get-ForjaToolCatalog | Where-Object Id -eq 'postgis-guide').Code }
+                'single-connections' { return 'T47' }
+                'single-invalid' { return 'T99' }
                 default { return '' }
             }
         }
+        if ($script:answers -eq 2 -and $FlowCase -eq 'catalog-return') { return '0' }
+        if ($script:answers -eq 2 -and $FlowCase -eq 'single-cancel') { return 'N' }
         if ($script:answers -eq 2 -and $FlowCase -ne 'cancel') { return 'S' }
         if ($FlowCase -eq 'cleanup-fail' -and $Prompt -like '*Eliminar la instalacion npm*') { return 'S' }
+        if ($FlowCase -eq 'stack-selected' -and ($Prompt -like '*Incluir Codex CLI?*' -or $Prompt -like '*Incluir Flask + OpenCV*' -or $Prompt -like '*Incluir Render CLI*')) { return 'S' }
         return 'N'
     }
     function global:Start-Process { throw 'PROHIBIDO iniciar procesos reales en estos flujos' }
     function global:Test-Path { param([string]$Path,[string]$LiteralPath,[string]$PathType)
         $candidate=$Path; if ($LiteralPath) { $candidate=$LiteralPath }
+        # La fixture simula un perfil ausente aunque el usuario lo haya creado en su PC.
+        if($candidate -like '*\Forja\Python\web-vision'){return $false}
         if ($FlowCase -eq 'cleanup-fail' -and ($candidate -like '*\npm\claude*' -or $candidate -like '*\.local\bin\claude.exe')) { return $true }
         Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
     }
@@ -84,7 +121,7 @@ $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('forja-flows-' + [guid]::NewGui
 $shellExe = (Get-Process -Id $PID).Path
 $passed = 0
 try {
-    foreach ($case in @('setup-ok','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','invalid')) {
+    foreach ($case in @('setup-ok','fresh-setup','stack-selected','setup-fail','update-fail','update-current','cleanup-fail','python-conflict','cancel','diagnostic','project-guide','catalog','catalog-return','single-node','single-cancel','single-guide','single-connections','single-invalid','invalid')) {
         $evidencePath = Join-Path $sandbox ($case + '.txt')
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $shellExe
@@ -96,10 +133,37 @@ try {
         if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "Timeout $case" }
         $stdout = $stdoutTask.Result; $stderr = $stderrTask.Result
         $expected = 0
-        if ($case -in @('setup-fail','update-fail','cleanup-fail')) { $expected = 1 }
+        if ($case -in @('setup-fail','update-fail','cleanup-fail','single-connections')) { $expected = 1 }
         if ($p.ExitCode -ne $expected -or $stderr) { throw "$case : exit=$($p.ExitCode) esperado=$expected`n$stderr`n$stdout" }
         $calls = @(Get-Content -LiteralPath $evidencePath)
-        if ($case -in @('cancel','diagnostic','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
+        if ($case -eq 'project-guide' -and ($calls.Count -gt 0 -or $stdout -notmatch 'STACK POR PROYECTO')) { throw 'La guia de stack debe funcionar sin ejecutar herramientas' }
+        if($case -eq 'setup-ok' -and ($stdout -notmatch 'FIXTURE_SESSION_CANCELLED' -or $stdout -notmatch 'ESTADO FINAL DE CONEXIONES' -or @($calls | Where-Object {$_ -eq 'vercel login'}).Count -gt 0)){throw 'Un login Vercel pendiente bloquea el final o vuelve a abrir el login'}
+        if($case -eq 'single-connections' -and ($calls.Count -ne 6 -or @($calls | Where-Object {$_ -notmatch '^(connection-check |vercel whoami)'}).Count -gt 0 -or $stdout -notmatch 'FIXTURE_OFFLINE' -or $stdout -match 'RESUMEN DE INSTALACION')){throw 'T47 no debe instalar ni repetir el setup; debe completar los seis servicios aun sin conexion'}
+        if ($case -eq 'stack-selected' -and ($stdout -notmatch 'Codex CLI' -or @($calls | Where-Object {$_ -like '*@openai/codex*'}).Count -eq 0)) { throw 'La seleccion de agentes no recorrio Codex CLI' }
+        if ($case -eq 'stack-selected') {
+            $summary=($stdout -split 'RESUMEN DE INSTALACION',2)[1]
+            if($summary -notmatch '\[PRESENTE / SIN CAMBIOS\]\s+Codex CLI' -or $summary -notmatch '\[PRESENTE / SIN CAMBIOS\]\s+Flask \+ OpenCV' -or $summary -notmatch '\[COMPLETADO\]\s+Render CLI'){throw 'El resumen no conserva nombre y estado de las herramientas seleccionadas'}
+        }
+        if($case -eq 'fresh-setup' -and $calls -notcontains 'archive supabase-native'){throw 'No se probo Supabase ausente con el instalador nativo simulado'}
+        if ($case -in @('cancel','diagnostic','project-guide','catalog','catalog-return','single-cancel','single-guide','single-invalid','invalid') -and $calls.Count -ne 0) { throw "$case ejecuto herramientas: $calls" }
+        if($case -eq 'single-node'){
+            if($calls.Count -eq 0 -or @($calls | Where-Object {$_ -notlike '*OpenJS.NodeJS.LTS*'}).Count -gt 0 -or $stdout -match 'RESUMEN DE INSTALACION'){throw 'La seleccion individual ejecuto otras herramientas'}
+        }
+        if($case -eq 'single-invalid' -and $stdout -notmatch 'Ese codigo no existe'){throw 'Codigo individual desconocido no se rechazo'}
+        if($case -in @('update-current','update-fail','python-conflict')){
+            $summary=($stdout -split 'RESUMEN DE ACTUALIZACION',2)[1]
+            if($summary -notmatch 'MOTIVOS Y SIGUIENTES PASOS' -or $summary -notmatch 'Motivo:' -or $summary -notmatch 'Siguiente paso:'){throw 'Resumen de actualizacion pierde causas y acciones'}
+        }
+        if($case -eq 'python-conflict' -and ($summary -notmatch '\[AVISO\] Python compartido' -or $summary -notmatch 'Ese entorno no se modifico')){throw 'El aviso del Python compartido se cuenta pero no queda explicado en el resumen'}
+        if($case -eq 'single-cancel' -and ($stdout -notmatch 'NO ELEGIDO' -or $stdout -notmatch 'No confirmaste')){throw 'La cancelacion individual no explica por que no actuo'}
+        if($case -eq 'catalog' -and ($stdout -notmatch 'CATALOGO COMPLETO' -or $stdout -notmatch 'Cloudflare Wrangler' -or $stdout -notmatch 'Miniforge3')){throw 'Catalogo incompleto o paginacion interrumpida'}
+        if($case -in @('catalog','catalog-return') -and @([regex]::Matches($stdout,'FORJA DEL DESARROLLADOR')).Count -ne 2){throw 'El catalogo no regresa al menu principal'}
+        if($case -eq 'invalid'){
+            $menuLines=@($stdout -split '\r?\n' | Where-Object {$_})
+            if(@($menuLines | Where-Object {$_.Length -gt 82}).Count -gt 0){throw 'El menu principal supera el ancho esperado'}
+            if($stdout -notmatch '\[T01\]' -or $stdout -notmatch 'Busca, instala y actualiza'){throw 'El menu no muestra codigos individuales y explicaciones'}
+            foreach($name in @('Cursor','Antigravity','Grok Bot','ChatGPT/Codex','Neon','Resend','Render','Wrangler','PostgreSQL','Miniforge')){if($stdout -notmatch [regex]::Escape($name)){throw "El menu omite $name"}}
+        }
         if ($case -eq 'update-fail' -and @($calls | Where-Object { $_ -match '^npm install' }).Count -gt 0) { throw 'Se instalo a pesar de fallar el registro' }
         if ($case -eq 'setup-fail' -and $stdout -notmatch '\[X\]') { throw 'No mostro errores de instalacion' }
         if ($case -eq 'update-current' -and $stdout -notmatch 'instalada: 1.0.0') { throw 'No muestra la version de segunda pasada' }
@@ -113,7 +177,9 @@ try {
             $current=[regex]::Match($stdout,'Ya al dia:\s*(\d+)').Groups[1].Value
             $errors=[regex]::Match($stdout,'Con errores:\s*(\d+)').Groups[1].Value
             $pending=[regex]::Match($stdout,'Pendientes:\s*(\d+)').Groups[1].Value
-            if ($updated -ne '0' -or $current -ne '19') { throw "Contadores incorrectos $case : $updated/$current" }
+            $catalog=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText((Join-Path $repoRoot 'catalog\stack-ia.json')))
+            $expectedCurrent=19+@($catalog | Where-Object {$_.Method -in @('winget','npm') -and -not $_.Core}).Count
+            if ($updated -ne '0' -or $current -ne [string]$expectedCurrent) { throw "Contadores incorrectos $case : $updated/$current esperado 0/$expectedCurrent" }
             if ($case -eq 'cleanup-fail' -and $errors -ne '1') { throw 'La limpieza fallida no quedo en el resumen' }
             $warnings=[regex]::Match($stdout,'Con avisos:\s*(\d+)').Groups[1].Value
             if ($case -eq 'python-conflict' -and ($pending -ne '0' -or $warnings -ne '1')) { throw 'El conflicto compartido debe quedar como aviso separado, sin afirmar que se reparo' }

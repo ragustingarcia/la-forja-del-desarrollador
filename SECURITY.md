@@ -10,7 +10,7 @@ Si se inicia toda la Forja como administrador, se detiene antes del menú.
 
 - Arranque con Windows PowerShell 5.1 del sistema, sin depender de tener PowerShell 7 instalado.
 - El BAT se lee en memoria. No crea VBS/PS1 temporales ni cambia la política de ejecución del equipo.
-- ENTER, 0 o una opción desconocida salen sin instalar. El modo 3 solo lista rutas de herramientas.
+- ENTER, 0 o una opción desconocida salen sin instalar. El modo 3 consulta rutas y presencia; el modo 4 muestra guías sin ejecutarlas.
 - Descargas de skills por SHA de 40 caracteres y proveedor permitido. No se ejecuta su contenido.
 - Temporales únicos en `%LOCALAPPDATA%\Forja\Staging`. Solo se limpian los creados durante esa ejecución.
 - Validación de junctions/enlaces en padres, origen, destino y limpieza. Las skills existentes se saltean.
@@ -28,11 +28,11 @@ cuenta comprometida ni habilites skills de origen desconocido.
 La actualización del BAT **no elimina ni revoca credenciales anteriores**. Hacelo desde la cuenta
 correcta, revisando primero qué otras herramientas dependen de ellas:
 
-1. En GitHub → Settings → Developer settings → Personal access tokens, identificá el token
+1. En GitHub â†’ Settings â†’ Developer settings â†’ Personal access tokens, identificá el token
    creado para el MCP anterior. Si tiene acceso amplio o pudo quedar visible en pantalla/logs,
    reemplazalo por una credencial limitada a los repositorios necesarios y revocá el anterior
    una vez verificada la migración. No publiques el token ni lo pegues en una issue.
-2. En Windows → Variables de entorno de usuario, revisá `GITHUB_PERSONAL_ACCESS_TOKEN`.
+2. En Windows â†’ Variables de entorno de usuario, revisá `GITHUB_PERSONAL_ACCESS_TOKEN`.
    Cuando ningún consumidor la necesite, eliminá esa variable. Cerrá las terminales y apps que
    heredaron el valor; borrarla del registro no la quita de procesos ya abiertos.
 3. Revisá la entrada `github` de Claude con `claude mcp get github`. Su salida puede contener
@@ -54,7 +54,7 @@ del Python compartido. Antes de dar éxito se verifican dependencias e imports. 
 preexistentes de otros entornos se muestran como avisos; conservarlos no significa haberlos reparado.
 Un fallo MSI de mongosh se conserva como error o pendiente y no dispara cambios automáticos de permisos.
 
-WinGet utiliza ID exacto y fuente `winget`, conservando las validaciones de hash de su gestor.
+WinGet utiliza ID exacto y fuente `winget`; la app ChatGPT/Codex usa el ID oficial de `msstore`, conservando las validaciones de hash de su gestor.
 npm y pip siguen instalando paquetes y dependencias publicados por terceros, que pueden ejecutar
 scripts de instalación. El modo actualizar requiere confirmación y no representa una certificación
 de todas las versiones descargadas. Este repositorio no tiene un árbol npm/pip propio ni un lockfile
@@ -64,6 +64,44 @@ Las skills tienen revisiones fijas; eso vuelve repetible la descarga, pero no ce
 código o instrucciones de Anthropic. Los cambios de esos SHA requieren revisión y pruebas.
 Un perfil de Windows con skills en otra unidad puede impedir el movimiento final; se informa error
 y la skill incompleta no se publica. Una limpieza rechazada conserva el temporal y muestra su ruta.
+
+## Paquetes nativos y proyectos en v6.2.0
+
+Los ZIP del catálogo tienen URL/versiones y SHA-256 fijos. La descarga se mantiene abierta sin
+compartir escritura mientras se verifica y extrae. Se rechazan traversal, rutas absolutas,
+ADS, entradas duplicadas, enlaces y excesos de expansión antes de crear archivos del paquete.
+La versión del ejecutable debe coincidir antes de promover el directorio nuevo; un directorio
+existente sin comprobante compatible no se pisa. Esto valida el artefacto revisado, no certifica
+todo el comportamiento del software del proveedor ni aísla procesos del mismo usuario.
+
+Los launchers propios no agregan Bypass ni ejecutan el bootstrap remoto de los proveedores.
+La ubicación de herramientas se muestra explícitamente, sin persistir cambios del PATH.
+Las instalaciones de otros gestores no se eliminan ni se migran automáticamente.
+
+Wrangler requiere elegir un proyecto existente y confirmar el cambio concreto en sus dependencias.
+No se ejecuta npx para descargar software implícitamente, ni se recorre el disco modificando proyectos.
+Las recetas de frontend y conexiones no realizan despliegues ni solicitudes de escritura a servicios.
+El perfil Flask/OpenCV usa un venv distinto; el Python compartido y Conda permanecen separados.
+
+## Transporte de descargas y progreso
+
+El transporte usa HttpClient con lectura en streaming, límites de tamaño y tiempos de espera.
+Valida HTTPS y ausencia de credenciales en cada salto, con un máximo de cinco redirecciones;
+el MSI de MongoDB no permite redirecciones. No altera la validación de certificados. El destino
+se crea sin sobrescribir y rechaza rutas reparse; se mantienen los controles de hash, ZIP y firma.
+
+La barra porcentual solo representa bytes recibidos, no el éxito de la instalación. Los gestores
+externos muestran actividad cuando no hay total medible. Sus procesos usan ejecutables absolutos,
+argumentos nativos y el directorio del sistema. npm se lanza mediante Node y npm-cli.js, sin shell
+de comandos intermedio ni cambios de allowScripts. Se conserva la salida y el código del proveedor.
+
+Los motivos y las acciones sugeridas se muestran en consola y se conservan en memoria para el
+resumen; no ejecutan esas sugerencias ni crean un registro persistente con credenciales. Los pasos
+conservan los controles y confirmaciones de instalación existentes.
+
+La consulta de sesión de Vercel es no interactiva y tiene un plazo acotado. Un timeout solo
+termina el proceso que Forja creó para esa consulta; no cierra procesos ajenos ni cambia el
+comportamiento de los instaladores. El login se completa manualmente en una terminal separada.
 
 ## Probar antes de distribuir
 
@@ -77,6 +115,11 @@ pwsh -NoProfile -File .\tests\flows.tests.ps1
 pwsh -NoProfile -File .\tests\native-tools.tests.ps1
 pwsh -NoProfile -File .\tests\python-environment.tests.ps1
 pwsh -NoProfile -File .\tests\msi-repair.tests.ps1
+pwsh -NoProfile -File .\tests\stack.tests.ps1
+pwsh -NoProfile -File .\tests\progress-individual.tests.ps1
+pwsh -NoProfile -File .\tests\outcomes.tests.ps1
+pwsh -NoProfile -File .\tests\connections.tests.ps1
+pwsh -NoProfile -File .\tests\review.tests.ps1
 ```
 
 `RemoteSigned` en ese comando afecta solo al proceso de prueba; no modifica políticas persistentes
@@ -85,7 +128,7 @@ y un payload BAT inerte. Los recorridos del cuerpo del instalador usan herramien
 y omiten el guard de administrador solo en la fixture en memoria para poder correr en CI.
 No inician sesiones, instalan paquetes ni llaman servicios reales.
 
-Antes de una release, falta además una prueba manual en una VM descartable de Windows 10/11:
+Verificación manual pendiente (no cubierta por CI): una prueba en una VM descartable de Windows 10/11:
 equipo sin PowerShell 7, instalación de WSL/UAC, reinicio, setup, segunda ejecución y actualización.
 Probar logins con cuentas de prueba separadas. CI o mocks no demuestran que los proveedores hayan
 instalado/autenticado correctamente en una máquina real.
@@ -96,3 +139,7 @@ Revisá la pestaña Security del repositorio y usá el reporte privado si está 
 contactá al autor mediante [su sitio](https://ragustingarcia.com/) sin incluir secretos o datos personales.
 Una issue pública puede describir un problema general, pero no debe contener credenciales,
 salidas completas de autenticación ni detalles sensibles de una cuenta.
+
+Las comprobaciones de cuentas de T47 usan procesos sin entrada interactiva y un límite de
+30 segundos. Forja no ejecuta los logins ni imprime sus respuestas crudas. Una consulta
+finalizada no significa sesión válida: la confirmación se decide al interpretar el resultado.

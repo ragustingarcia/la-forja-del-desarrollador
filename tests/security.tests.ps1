@@ -13,6 +13,8 @@ function Invoke-ForjaTool { param([string]$Name)
     & $Name @args
 }
 $script:runtimeExit=0; $script:runtimeOutput='1.0.0'
+function Invoke-ForjaWingetOperation {param($ArgumentList,$Label) & winget @ArgumentList}
+function Invoke-ForjaGitTransfer {param($ArgumentList) & git @ArgumentList}
 $passed = 0
 function Assert { param([bool]$Condition, [string]$Message)
     if (-not $Condition) { throw "FALLO: $Message" }
@@ -26,6 +28,7 @@ function Assert-Throws { param([scriptblock]$Action, [string]$Message)
 }
 function global:winget {
     $script:wingetArgs = @($args)
+    if($args[0] -eq 'install'){$script:wingetInstallArgs=@($args)}
     if ($script:wingetQueue -and $script:wingetQueue.Count -gt 0) {
         $response=$script:wingetQueue.Dequeue()
         $global:LASTEXITCODE=$response.Code
@@ -78,7 +81,7 @@ try {
     Assert ((Get-WingetUpdateState 'Git.Git') -eq 'update') 'update disponible por ID exacto'
     $result = @(Install-Winget 'Git.Git' 'Git')
     Assert ($result.Count -eq 1 -and $result[0] -eq $true) 'instalacion correcta retorna solo booleano'
-    Assert (($script:wingetArgs -contains '--exact') -and ($script:wingetArgs -contains '--source')) 'winget restringe ID y fuente'
+    Assert (($script:wingetInstallArgs -contains '--exact') -and ($script:wingetInstallArgs -contains '--source')) 'winget restringe ID y fuente'
     $script:mockWingetOutput = 'GitXGit 2.0 2.1'
     Assert ((Get-WingetUpdateState 'Git.Git') -eq 'error') 'regex no confunde otro identificador'
     $script:mockWingetOutput = ''
@@ -111,6 +114,12 @@ try {
     Assert ((Invoke-WingetUpdate 'Git.Git' 'Git') -eq 'error') 'exit cero sin version nueva no se presenta como actualizado'
 
 
+    foreach($id in @('Google.AndroidStudio','CondaForge.Miniforge3')){
+        $script:wingetQueue.Enqueue(@{Code=0;Output="Tool $id 1.0.0 2.0.0 winget"})
+        $script:wingetQueue.Enqueue(@{Code=-1978334956;Output='Use the method provided by the publisher.'})
+        Assert ((Invoke-WingetUpdate $id $id) -eq 'pendiente') "$id requiere actualizador del proveedor y no se informa como error de red"
+    }
+    Assert ($script:wingetQueue.Count -eq 0) 'no reintenta automaticamente actualizaciones no soportadas'
     $script:npmCalls = @(); $script:npmListExit = 1; $script:npmListOutput = 'snyk@1.0.0 error'
     Assert (-not (Test-NpmPkg 'snyk')) 'npm list fallido no marca instalado'
     $script:npmListExit = 0; $script:npmListOutput = 'snyk@1.0.0'
