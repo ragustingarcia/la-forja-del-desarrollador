@@ -186,7 +186,7 @@ requieren actualizar el catálogo revisado de Forja; no se descargan automática
 ## Evidencia y límites
 
 Validación local en PowerShell 5.1 y 7: **327 casos por shell** (84 de seguridad, 18 flujos,
-5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack, 30 de progreso/selección individual 45 de explicaciones y 22 de conexiones), sin fallos.
+5 de ejecución nativa, 11 Python, 16 MSI, 96 del catálogo/stack, 30 de progreso/selección individual, 45 de explicaciones y 22 de conexiones), sin fallos.
 
 Las pruebas aisladas cubren selección y resumen completos, versiones Python coexistentes, rechazo
 de instalación de una rama nueva, confirmación fallida, separación de Flask/OpenCV, paquetes npm

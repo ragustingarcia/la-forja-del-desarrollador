@@ -58,7 +58,7 @@ $savedCi=$env:CI
 $source='[Console]::WriteLine("CI_VALUE="+$env:CI); [Console]::WriteLine("EOF_VALUE="+([Console]::In.ReadLine() -eq $null)); exit 0'
 $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($source))
 $result=Invoke-ForjaPackageProcess $shell @('-NoProfile','-EncodedCommand',$encoded) 'Fixture stdin' -TimeoutSeconds 5 -NonInteractive
-Assert ($result.ExitCode -eq 0 -and ($result.Output -join ' ') -match 'CI_VALUE=true' -and ($result.Output -join ' ') -match 'EOF_VALUE=True') 'proceso inerte recibe CI y stdin cerrado sin prompts'
+Assert ($result.ExitCode -eq 0 -and ($result.Output -join ' ') -match 'CI_VALUE=true' -and ($result.Output -join ' ') -match 'EOF_VALUE=True') ('proceso inerte recibe CI y stdin cerrado sin prompts; exit='+$result.ExitCode+'; salida='+($result.Output -join ' | '))
 Assert ($env:CI -ceq $savedCi) 'CI no se persiste ni se cambia en el proceso padre'
 $peer=$null
 try {
